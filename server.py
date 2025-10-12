@@ -9,7 +9,7 @@ def handle_client(client_socket):
         # Checks if the client has disconnected
         if not data:
             break
-        message = data.decode('uft-8') # decodes data
+        message = data.decode('utf-8') # decodes data
         print(f"Received message: {message}")
         response = f"Server received your message: {message}"
         client_socket.sendall(response.encode('utf-8')) # encodes response message back to client
@@ -29,7 +29,7 @@ def main():
         client_socket, client_address = server_socket.accept()
         print(f"Accepted connection from {client_address}")
         # Allows the server to handle multiple connections concurrently
-        client_handler = threading.Thread(target = handle_client, args = (client_socket))
+        client_handler = threading.Thread(target = handle_client, args = (client_socket,))
         client_handler.start()
 
 if __name__ == "__main__":

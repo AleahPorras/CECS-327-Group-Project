@@ -92,18 +92,23 @@ if __name__ == '__main__':
     #-----------------------------creating a room-------------------------------- 
     elif action == "create" or action == "Create":
 
+        # calling client function that asks the user for a room they would want to create
         room = get_room_to_create()
 
+        # gets the state of all rooms before new room is added
         rooms_before = proxy.all_rooms()
         print(f'Current list before adding: {rooms_before}\n')
 
         print("Creating the room...\n")
         
+        # creates a new room and makes them thw owner 
         output = proxy.create_room(room, user)
+        # adds the owner to the list of members
         proxy.join_room(room, user)
+        # gets the updated list of members in the room
         current_rooms =  proxy.all_rooms()
 
-
+        #prints out the list of members
         print(f'List of all current rooms and members: {current_rooms}\n')
 
     else: 

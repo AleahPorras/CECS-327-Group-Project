@@ -18,6 +18,10 @@ list_of_chat_rooms = {}
 
 
 #& FUNCTION THAT CREATES A NEW ROOM, ADDS THE CREATOR TO ROOM
+def all_rooms():
+    
+    return list_of_chat_rooms
+
 def create_room(room_to_create, user): # later on will implement an "owned by:" parameter
     """Creates a new chatroom that different clients can join. Will check if a chatroom with the same name already exists."""
     # Appends the new chatroom to the list of existing chatrooms
@@ -34,7 +38,10 @@ def create_room(room_to_create, user): # later on will implement an "owned by:" 
     print(f"Chatroom owner {user} has entered the room {room_to_create}.")
     return list_of_chat_rooms
 
-
+def current_members(room_to_join):
+    list_of_members = list_of_chat_rooms[room_to_join]['members']
+    return list_of_members
+    
 #& FUNCTION THAT ADDS A USER TO A ROOM
 def join_room(room_to_join, user): 
     """Will allow the user to join rooms they are intrested in."""
@@ -52,8 +59,12 @@ def join_room(room_to_join, user):
 #!___________________________ FUNCTION REGISTRATION ___________________________
 #registering the function 
 # server.register_function(list_directory)
+server.register_function(all_rooms)
+server.register_function(current_members)
+
 server.register_function(create_room)
 server.register_function(join_room)
+
 
 
 

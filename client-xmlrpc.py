@@ -15,7 +15,7 @@ def get_room_to_join():
     return room_to_join
 
 def get_room_to_create():
-    room_to_create = input("Enter the name of the room you want to create:") 
+    room_to_create = input("Enter the name of the room you want to create: ") 
     # Checks if the user provided a name for the room
     while room_to_create == None: 
         print("No name provided, try again.")
@@ -34,17 +34,27 @@ if __name__ == '__main__':
     
     if action == "join" or action == "Join":
         room = get_room_to_join()
-        print("Joining the room...")
+
+        current_members = proxy.current_members(room)
+        print(f"List of all current members: {current_members}\n")
+
+        print("Joining the room...\n")
         output = proxy.join_room(room, user)
+
         print(f"{user} you have joined {room}")
-        print(output)
+        print(f'List of updated members: {output}')
         
     elif action == "create" or action == "Create":
 
         room = get_room_to_create()
-        print("Creating the room...")
+
+        rooms_before = proxy.all_rooms()
+        print(f'Current list before adding: {rooms_before}\n')
+
+        print("Creating the room...\n")
         output = proxy.create_room(room, user)
-        print(output)
+        
+        print(f'List of all current rooms and members: {output}')
 
     else: 
         print("You have not entered a valued response, please run again. ")

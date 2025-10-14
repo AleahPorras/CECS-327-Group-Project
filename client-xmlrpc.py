@@ -34,9 +34,15 @@ if __name__ == '__main__':
     #---------------------------joining a room------------------------------
     if action == "join" or action == "Join":
         room = get_room_to_join()
+
+        #Calls the function from the server
         current_rooms = proxy.all_rooms()
         
-    
+        #Error handling for when a user tries to access a room that doesnt exist 
+        # * Will ask the user if they want to create the room with that name 
+        #   - Then creates the room by calling the function from the client 
+        # * Will ask if the user would rather put in a new name in case they put in the wrong name 
+        #   by mistake 
         while room not in current_rooms: 
             answer = input("This room does not exist, would you like to create it? yes/no: ")
             if answer == "Yes" or answer == 'yes': 
@@ -54,22 +60,30 @@ if __name__ == '__main__':
                 current_members = proxy.current_members(room)
                
 
-               
+            # repeats if the user puts in a response that isn't correct 
             else: 
                 print("Not a correct response try again... ")
 
             current_rooms = proxy.all_rooms()
         
-        
-        print("Joining the room...\n")
 
+        # Carries out for all attmepts 
+        print("\n Joining the room...\n")
+
+        # fetching the current list of members 
         current_members = proxy.current_members(room)
+
+        # adding the user to the room
         output = proxy.join_room(room, user)
         print(f"List of all current members: {current_members}\n")
 
+        # verification for the user that they have been added
         print(f"{user} you have joined {room}\n")
       
+        # getting the current list of users in the room
         current_members = proxy.current_members(room)
+
+        #returns to terminal to make sure that the list has changed from before
         print(f"List of all current members: {current_members}\n")
                
         

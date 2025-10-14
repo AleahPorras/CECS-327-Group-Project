@@ -7,10 +7,10 @@ PUB_ADDR = "tcp://127.0.0.1:5556"
 def main():
     ctx = zmq.Context.instance()
     pull = ctx.socket(zmq.PULL)     #receive messages from PUSH
-    pull.bind(PUB_ADDR)
+    pull.bind(PULL_ADDR)
 
     pub = ctx.socket(zmq.PUB)   # publishes to all subscribers who follow the topic
-    pub.bind(PULL_ADDR)     
+    pub.bind(PUB_ADDR)     
 
     print(f"[broker] PULL {PULL_ADDR}, PUB {PUB_ADDR}")
 

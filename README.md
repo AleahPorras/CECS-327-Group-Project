@@ -91,9 +91,11 @@ This demonstrates administrative communication for room setup.
 
     python client-xmlrpc.py
 
-        The client will immediately list available rooms (using the RPC list_rooms call).
-
         Follow the prompts to enter a username and choose the action (join or create).
+
+		Will send out to the user verifcation that their room was creates and/or that that have 
+		been added to a room. (Some will have before and afters of the list of rooms and/or list of 
+		members in a room)
 
         Observe the response printed to the client and the confirmation log on the server console.
 

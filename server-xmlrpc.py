@@ -26,13 +26,13 @@ def create_room(room_to_create, user): # later on will implement an "owned by:" 
     """Creates a new chatroom that different clients can join. Will check if a chatroom with the same name already exists."""
     # Appends the new chatroom to the list of existing chatrooms
     list_of_chat_rooms[room_to_create] = {
-        'owner': user,
+        'owner': [],
         'members': [], # where we will store the members of the chatroom
     }
     # Confirmation message that chatroom has been created
     print(f"Chatroom {room_to_create} has been created.\n")
 
-    list_of_chat_rooms[room_to_create]['members'].append(user)
+    list_of_chat_rooms[room_to_create]['owner'].append(user)
     # Confirmation message that chatroom owner has entered the room.
     print("BELLO BELLO BELLO BELLO WELCOME TO THE START OF YOUR CHAT HISTORY!!")
     print(f"Chatroom owner {user} has entered the room {room_to_create}.")

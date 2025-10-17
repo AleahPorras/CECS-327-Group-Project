@@ -2,6 +2,7 @@ import  xmlrpc.client
 import zmq
 import json
 import threading
+import sys
 
 def message_subscriber(chatroom_name, user):
     BROKER_PUB = "tcp://127.0.0.1:5556" # connects to the broker
@@ -12,7 +13,8 @@ def message_subscriber(chatroom_name, user):
     sub.connect(BROKER_PUB)
     sub.setsockopt_string(zmq.SUBSCRIBE, TOPIC) # install a topic/prefix filter
     print(f"[Client] Subscribed to messages in {chatroom_name}.")
-    print("> ", end ="", flush=True)
+    # prompts user for message input
+    print("You: ", end ="", flush=True)
 
     while True:
         try:
@@ -23,7 +25,7 @@ def message_subscriber(chatroom_name, user):
 
             # Ensures that the user's messages don't echo back to them
             if payload.get("user") != user:
-                print(f"{payload['user']}: {payload['text']}\n> ", end ="",flush=True)
+                print(f"\n{payload['user']}: {payload['text']}\nYou: ", end ="",flush=True)
 
         except (KeyboardInterrupt, zmq.ZMQError):
             break
@@ -80,19 +82,23 @@ def main():
 
         proxy.join_room(chatroom, user)
 
-        thread = threading.Thread(target = message_subscriber, args = (chatroom, user), daemon=True)
+        thread = threading.Thread(target = message_subscriber, args = (chatroom, user))
         thread.start()
 
         while True:
             message = input()
             if message == 'exit' or message == 'Exit':
                 print("\nExiting chat...")
-                break
+                message = f"{user} has left the chat"
+                proxy.send_message(chatroom, user, message)
+                # proxy.exit_message(user)
+                sys.exit()
             proxy.send_message(chatroom, user, message)
-            print("> ", end = "",flush=True)
+            print("You: ", end = "",flush=True)
 
     except KeyboardInterrupt:
         print("\nExiting chat...")
+        
 
 if __name__ == '__main__': 
     main()

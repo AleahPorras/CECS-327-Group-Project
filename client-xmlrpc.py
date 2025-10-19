@@ -12,7 +12,7 @@ def message_subscriber(chatroom_name, user):
     sub.connect(BROKER_PUB)
     sub.setsockopt_string(zmq.SUBSCRIBE, TOPIC) # install a topic/prefix filter
     print(f"[Client] Subscribed to messages in {chatroom_name}.")
-    print("> ", end ="", flush=True)
+    # print("You : ", end ="", flush=True)
 
     while True:
         try:
@@ -23,7 +23,9 @@ def message_subscriber(chatroom_name, user):
 
             # Ensures that the user's messages don't echo back to them
             if payload.get("user") != user:
-                print(f"{payload['user']}: {payload['text']}\n> ", end ="",flush=True)
+                print(f"\r{payload['user']}: {payload['text']}")
+                print(f"({user})You: ", end ="",flush=True)
+                # print("You > ", end ="", flush=True)
 
         except (KeyboardInterrupt, zmq.ZMQError):
             break
@@ -84,100 +86,101 @@ def main():
         thread.start()
 
         while True:
+            print(f"({user})You: ", end = "", flush = True)
             message = input()
             if message == 'exit' or message == 'Exit':
                 print("\nExiting chat...")
                 break
             proxy.send_message(chatroom, user, message)
-            print("> ", end = "",flush=True)
+            # print("You > ", end = "", flush = True) #, end = "",flush=True)
 
     except KeyboardInterrupt:
         print("\nExiting chat...")
 
 if __name__ == '__main__': 
     main()
-#     ##EXAMPLE CALLING
-#     #Calling the remote function and printing the list (place holder function)
-#     ## We will call our functions like this 
-#     # print(proxy.list_directory())
+# #     ##EXAMPLE CALLING
+# #     #Calling the remote function and printing the list (place holder function)
+# #     ## We will call our functions like this 
+# #     # print(proxy.list_directory())
 
-#     user = input("What is your username?: ")
-#     action = input("Would you like to join or create a room? (join/create): ")
-#     #---------------------------joining a room------------------------------
-#     if action == "join" or action == "Join":
-#         room = get_room_to_join()
+# #     user = input("What is your username?: ")
+# #     action = input("Would you like to join or create a room? (join/create): ")
+# #     #---------------------------joining a room------------------------------
+# #     if action == "join" or action == "Join":
+# #         room = get_room_to_join()
 
-#         #Calls the function from the server
-#         current_rooms = proxy.all_rooms()
+# #         #Calls the function from the server
+# #         current_rooms = proxy.all_rooms()
         
-#         #Error handling for when a user tries to access a room that doesnt exist 
-#         # * Will ask the user if they want to create the room with that name 
-#         #   - Then creates the room by calling the function from the client 
-#         # * Will ask if the user would rather put in a new name in case they put in the wrong name 
-#         #   by mistake 
-#         while room not in current_rooms: 
-#             answer = input("This room does not exist, would you like to create it? yes/no: ")
-#             if answer == "Yes" or answer == 'yes': 
+# #         #Error handling for when a user tries to access a room that doesnt exist 
+# #         # * Will ask the user if they want to create the room with that name 
+# #         #   - Then creates the room by calling the function from the client 
+# #         # * Will ask if the user would rather put in a new name in case they put in the wrong name 
+# #         #   by mistake 
+# #         while room not in current_rooms: 
+# #             answer = input("This room does not exist, would you like to create it? yes/no: ")
+# #             if answer == "Yes" or answer == 'yes': 
                 
-#                 print("Creating the room...\n")
-#                 output = proxy.create_room(room, user)
-#                 print(f'List of all current rooms and members: {output}\n')
-#                 print("Welcome to your new room!")
+# #                 print("Creating the room...\n")
+# #                 output = proxy.create_room(room, user)
+# #                 print(f'List of all current rooms and members: {output}\n')
+# #                 print("Welcome to your new room!")
                 
-#             elif answer == "No" or answer == 'no':
-#                 room = get_room_to_join()
-#                 current_members = proxy.current_members(room)
+# #             elif answer == "No" or answer == 'no':
+# #                 room = get_room_to_join()
+# #                 current_members = proxy.current_members(room)
             
-#             # repeats if the user puts in a response that isn't correct 
-#             else: 
-#                 print("Not a correct response try again... ")
-#             current_rooms = proxy.all_rooms()
+# #             # repeats if the user puts in a response that isn't correct 
+# #             else: 
+# #                 print("Not a correct response try again... ")
+# #             current_rooms = proxy.all_rooms()
             
-#         # Carries out for all attmepts 
-#         print("\n Joining the room...\n")
+# #         # Carries out for all attmepts 
+# #         print("\n Joining the room...\n")
 
-#         # fetching the current list of members 
-#         current_members = proxy.current_members(room)
+# #         # fetching the current list of members 
+# #         current_members = proxy.current_members(room)
 
-#         # adding the user to the room
-#         output = proxy.join_room(room, user)
-#         print(f"List of all current members: {current_members}\n")
+# #         # adding the user to the room
+# #         output = proxy.join_room(room, user)
+# #         print(f"List of all current members: {current_members}\n")
 
-#         # verification for the user that they have been added
-#         print(f"{user} you have joined {room}\n")
+# #         # verification for the user that they have been added
+# #         print(f"{user} you have joined {room}\n")
 
-#         # getting the current list of users in the room
-#         current_members = proxy.current_members(room)
+# #         # getting the current list of users in the room
+# #         current_members = proxy.current_members(room)
 
-#         #returns to terminal to make sure that the list has changed from before
-#         print(f"List of all current members: {current_members}\n")
+# #         #returns to terminal to make sure that the list has changed from before
+# #         print(f"List of all current members: {current_members}\n")
         
     
-#     #-----------------------------creating a room-------------------------------- 
-#     elif action == "create" or action == "Create":
+# #     #-----------------------------creating a room-------------------------------- 
+# #     elif action == "create" or action == "Create":
 
-#         # calling client function that asks the user for a room they would want to create
-#         room = get_room_to_create()
+# #         # calling client function that asks the user for a room they would want to create
+# #         room = get_room_to_create()
 
-#         # gets the state of all rooms before new room is added
-#         rooms_before = proxy.all_rooms()
-#         print(f'Current list before adding: {rooms_before}\n')
+# #         # gets the state of all rooms before new room is added
+# #         rooms_before = proxy.all_rooms()
+# #         print(f'Current list before adding: {rooms_before}\n')
 
-#         print("Creating the room...\n")
+# #         print("Creating the room...\n")
         
-#         # creates a new room and makes them thw owner 
-#         output = proxy.create_room(room, user)
-#         # adds the owner to the list of members
-#         proxy.join_room(room, user)
-#         # gets the updated list of members in the room
-#         current_rooms =  proxy.all_rooms()
+# #         # creates a new room and makes them thw owner 
+# #         output = proxy.create_room(room, user)
+# #         # adds the owner to the list of members
+# #         proxy.join_room(room, user)
+# #         # gets the updated list of members in the room
+# #         current_rooms =  proxy.all_rooms()
 
-#         #prints out the list of members
-#         print(f'List of all current rooms and members: {current_rooms}\n')
+# #         #prints out the list of members
+# #         print(f'List of all current rooms and members: {current_rooms}\n')
 
-#     else: 
-#         print("You have not entered a valued response, please run again. ")
-#         print("Hint: You must have it printed exactly, either join or create")
+# #     else: 
+# #         print("You have not entered a valued response, please run again. ")
+# #         print("Hint: You must have it printed exactly, either join or create")
 
     
 

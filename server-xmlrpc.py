@@ -85,16 +85,16 @@ def send_message(chatroom_name, user, message):
 
     payload = {"user": user, "text": message}
 
-    # Formats the message 
-    message_to_broker = {"topic": topic, "payload": payload}
+    try:
+        # Formats the message 
+        message_to_broker = {"topic": topic, "payload": payload}
 
-    # Pushes message to the broker
-    push.send_json(message_to_broker)
-    print(f"Sent message to chatroom {topic}: {payload}")
-    return True
-
-# def exit_message(user_name):
-#     print(f"{user_name} has exited the chat")
+        # Pushes message to the broker
+        push.send_json(message_to_broker)
+        print(f"Sent message to chatroom {topic}: {payload}")
+        return True
+    except Exception:
+        return False
 
 
 #!___________________________ FUNCTION REGISTRATION ___________________________
@@ -107,8 +107,6 @@ server.register_function(current_members)
 server.register_function(create_room)
 server.register_function(join_room)
 
-# server.register_function(exit_message)
-
 
 #!___________________________     SERVER CALLING    ___________________________
 if __name__ == '__main__': 
@@ -120,5 +118,7 @@ if __name__ == '__main__':
 
     except KeyboardInterrupt:
         ## Not Sucessful
+        print('Unable to connect, try again later')
+
         print('Unable to connect, try again later')
 

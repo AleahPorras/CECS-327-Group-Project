@@ -93,8 +93,8 @@ def send_message(chatroom_name, user, message):
     print(f"Sent message to chatroom {topic}: {payload}")
     return True
 
-def exit_message(user_name):
-    print(f"{user_name} has exited the chat")
+# def exit_message(user_name):
+#     print(f"{user_name} has exited the chat")
 
 
 #!___________________________ FUNCTION REGISTRATION ___________________________
@@ -107,7 +107,7 @@ server.register_function(current_members)
 server.register_function(create_room)
 server.register_function(join_room)
 
-server.register_function(exit_message)
+# server.register_function(exit_message)
 
 
 #!___________________________     SERVER CALLING    ___________________________

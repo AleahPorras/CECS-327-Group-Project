@@ -3,6 +3,7 @@ import zmq
 import json
 import threading
 import sys
+import os
 
 def message_subscriber(chatroom_name, user):
     BROKER_PUB = "tcp://127.0.0.1:5556" # connects to the broker
@@ -84,18 +85,20 @@ def main():
 
         thread = threading.Thread(target = message_subscriber, args = (chatroom, user))
         thread.start()
-
+        
+        message = f"{user} has joined the chat"
+        proxy.send_message(chatroom, 'ThisCordBot', message)
         while True:
             message = input()
             if message == 'exit' or message == 'Exit':
                 print("\nExiting chat...")
                 message = f"{user} has left the chat"
-                proxy.send_message(chatroom, user, message)
+                proxy.send_message(chatroom, 'ThisCordBot', message)
                 # proxy.exit_message(user)
-                sys.exit()
+                os._exit(0)
+            
             proxy.send_message(chatroom, user, message)
-            print("You: ", end = "",flush=True)
-
+                
     except KeyboardInterrupt:
         print("\nExiting chat...")
         

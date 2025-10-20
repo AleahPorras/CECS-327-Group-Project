@@ -84,8 +84,10 @@ This demonstrates administrative communication for room setup.
     1. Start the Room Management Service (RPC Server):
 
     python server-xmlrpc.py
-
-    (The server will listen on localhost:3000).
+	
+		Error handling if identical name and room are created
+    
+	(The server will listen on localhost:3000).
 
     2. Run the Client Administration Script:
 

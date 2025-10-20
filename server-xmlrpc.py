@@ -1,6 +1,7 @@
 import xmlrpc.server 
 import zmq
 import json
+from xmlrpc.server import Fault
 
 #!___________________________     INITIALIZING     __________________________
 #For the list_directory() function
@@ -58,17 +59,20 @@ def create_room(room_to_create, user): # later on will implement an "owned by:" 
 
 #& FUNCTION THAT ADDS A USER TO A ROOM
 def join_room(room_to_join, user): 
-    """Will allow the user to join rooms they are intrested in."""
+    """Will allow the user to join rooms they are interested in."""
 
     # Error message when a chatroom that does not exist is inputed
     if room_to_join not in list_of_chat_rooms:
         return f"Error: The chatroom {room_to_join} does not exist."
 
+    members = list_of_chat_rooms[room_to_join]['members']
+    if user in members:
+        raise Fault(409, f"Error : The user {user} has already joined {room_to_join}")
+
     # appends the current user to the members
     list_of_chat_rooms[room_to_join]['members'].append(user)
 
     # Confirmation message that a user has entered the chatroom.
-
     updated_members = list_of_chat_rooms[room_to_join]['members']
     print(f"Welcome {user}! They have entered the room {room_to_join}.")
 

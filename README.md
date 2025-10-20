@@ -8,7 +8,7 @@ Core Requirements
 
     Python 3.8+
 
-    Multithreading support (standard in Python, used in server.py for concurrent client handling).
+    Multithreading support (standard in Python, used in server-xmlrpc.py for concurrent client handling).
 
 Dependencies
 
@@ -28,11 +28,11 @@ This section maps the source files to their specific roles within the ThisCord a
 
 A. Direct Communication – Interprocess Communication (IPC)
 
-    File Name       Component Role                 Communication Protocol        Purpose
+    File Name       		Component Role                 Communication Protocol        Purpose
 
-    server.py       Chat Message Hub (Server)      TCP Socket (Stream)           Acts as the main communication endpoint for real-time chat, handling multiple simultaneous client connections using threading to ensure concurrency.
+    server-xmlrpc.py       	Chat Message Hub (Server)      TCP Socket (Stream)           Acts as the main communication endpoint for real-time chat, handling multiple simultaneous client connections using threading to ensure concurrency.
 
-    client.py       Chat Client                    TCP Socket (Stream)           Simulates an actively chatting user, connecting to the Message Hub to send messages and receive immediate echo confirmation.
+    client-xmlrpc.py    	Chat Client                    TCP Socket (Stream)           Simulates an actively chatting user, connecting to the Message Hub to send messages and receive immediate echo confirmation.
 	
 B. Remote Communication – Remote Procedure Call (RPC)
 
@@ -44,13 +44,13 @@ B. Remote Communication – Remote Procedure Call (RPC)
 
 C. Indirect Communication – Message Queues (Planned)
 
-    File Name       Component Role              ZMQ Protocol / Socket Type     Purpose
+    File Name       	Component Role              ZMQ Protocol / Socket Type     Purpose
     
-    broker.py       ZMQ Forwarding Broker       PULL / PUB       Binds two separate sockets: a PULL socket to receive messages from Publishers and a PUB socket to distribute those messages to all connected Subscribers based on their topics.
+    broker.py       	ZMQ Forwarding Broker       PULL / PUB       Binds two separate sockets: a PULL socket to receive messages from Publishers and a PUB socket to distribute those messages to all connected Subscribers based on their topics.
 
-    subscriber.py   Monitoring Subscriber       SUB              Connects to the Broker's PUB address and uses a topic filter (zmq.SUBSCRIBE) to asynchronously receive and process relevant system events (e.g., chatroom activity, server health metrics).
+    client-xmlrpc.py   	Monitoring Subscriber       SUB              Connects to the Broker's PUB address and uses a topic filter (zmq.SUBSCRIBE) to asynchronously receive and process relevant system events (e.g., chatroom activity, server health metrics).
 
-    publisher.py    Server Event Publisher      PUSH             Connects to the Broker's PULL address and pushes non-essential, asynchronous events (e.g., "User Login," "Chatroom Created") to decouple the main server load.
+    server-xmlrpc.py    Server Event Publisher      PUSH             Connects to the Broker's PULL address and pushes non-essential, asynchronous events (e.g., "User Login," "Chatroom Created") to decouple the main server load.
 
 3. How to Run Each Module
 
@@ -59,21 +59,24 @@ A. Direct Communication (IPC - TCP Sockets)
 
 This demonstration requires two or more terminals for the server and client(s).
 
-    1. Start the Server (Chat Message Hub):
+    1. Start the Broker and Server (Chat Message Hub):
 
-    python server.py
+    python broker.py
 
-    (The server will listen on 127.0.0.1:12345).
+    (The server will listen on 127.0.0.1:5555).
 
-    2. Start Client 1:
+    python server-xmlrpc.py
+	( The server returns "Connecting to ThisCord Server...)
+	
+	2. Start Client 1:
 
-    python client.py
+    python client-xmlrpc.py
 
-    (Enter a message, and observe the echo response).
+    (Enter a name/room, and observe the echo response on server-xmlrpc).
 
     3. Start Client 2 (Optional, in a new terminal):
 
-    python client.py
+    python client-xmlrpc.py
 
     (Observe that the server handles both connections concurrently).
 
@@ -114,11 +117,11 @@ This demonstration requires three terminals for the broker, the subscriber, and 
     2. Start the Monitoring Subscriber (Specify a topic filter):
 
     # Subscribes to events starting with 'room/'
-    python subscriber.py room/
+    python client-xmlrpc.py room/
 
     3. Run the Server Event Publisher:
 
-    python publisher.py
+    python server-xmlrpc.py
 
     (The publisher will send a single message with the topic room/general and then exit. The subscriber should immediately receive and print the message).
 

@@ -41,8 +41,8 @@ def create_room(room_to_create, user): # later on will implement an "owned by:" 
 
     # Error message when a chatroom that already exists is inputed
     if room_to_create in list_of_chat_rooms:
-        return f"Error: The chatroom {room_to_create} already exists."
-
+        #return f"Error: The chatroom {room_to_create} already exists."
+        raise Fault(409, f"chat room {room_to_create} already exists.")
     # Appends the new chatroom to the list of existing chatrooms
     list_of_chat_rooms[room_to_create] = {
         'owner': [],
@@ -62,6 +62,7 @@ def join_room(room_to_join, user):
     """Will allow the user to join rooms they are interested in."""
 
     # Error message when a chatroom that does not exist is inputed
+    # Error message if name is existed
     if room_to_join not in list_of_chat_rooms:
         return f"Error: The chatroom {room_to_join} does not exist."
 

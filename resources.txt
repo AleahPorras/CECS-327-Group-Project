@@ -1,5 +1,0 @@
-Basic IPC implementation:
-https://pandeyshikha075.medium.com/building-a-chat-server-and-client-in-python-with-socket-programming-c76de52cc1d5
-
-More intense IPC implementation:
-https://mathspp.com/blog/chatroom-server-tutorial 

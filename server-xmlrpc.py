@@ -100,7 +100,18 @@ def send_message(chatroom_name, user, message):
         return True
     except Exception:
         return False
-
+    
+def remove_user(chatroom_name, user):
+    try: 
+        list_of_chat_rooms[chatroom_name]['members'].remove(user)
+        print(f"User {user} removed from {chatroom_name}.")
+    except ValueError:
+        # in the case where user isnt found
+        raise Fault(409, f"Error : The user {user} is not in {chatroom_name}.")
+    except KeyError:
+        # in the case where chatroom isnt found
+        return False
+    return True
 
 #!___________________________ FUNCTION REGISTRATION ___________________________
 #registering the functions
@@ -111,6 +122,7 @@ server.register_function(current_members)
 
 server.register_function(create_room)
 server.register_function(join_room)
+server.register_function(remove_user)
 
 
 #!___________________________     SERVER CALLING    ___________________________
@@ -123,7 +135,5 @@ if __name__ == '__main__':
 
     except KeyboardInterrupt:
         ## Not Sucessful
-        print('Unable to connect, try again later')
-
         print('Unable to connect, try again later')
 

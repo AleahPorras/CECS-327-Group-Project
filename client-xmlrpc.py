@@ -70,7 +70,10 @@ def main():
                     print(f"Chatroom {chatroom_name} exists, join it instead.\n")
             
             elif action == "join" or action == "Join":
-                print(f"Available Chatrooms:\n{current_rooms}")
+                print(f"Available Chatrooms:")
+                for room in current_rooms:
+                    print(room)
+                    print(proxy.current_members(room))
                 chatroom_name = get_room_to_join()
                 if chatroom_name in current_rooms:
                     chatroom = chatroom_name
@@ -90,12 +93,15 @@ def main():
             message = input()
             if message == 'exit' or message == 'Exit':
                 print("\nExiting chat...")
+                proxy.remove_user(chatroom, user)
+                exit_message = f"{user} exited the chatroom."
+                proxy.send_message(chatroom, "[ThisCordBot]", exit_message)
                 break
             proxy.send_message(chatroom, user, message)
-            # print("You > ", end = "", flush = True) #, end = "",flush=True)
 
     except KeyboardInterrupt:
         print("\nExiting chat...")
+        proxy.remove_user(chatroom, user)
 
 if __name__ == '__main__': 
     main()

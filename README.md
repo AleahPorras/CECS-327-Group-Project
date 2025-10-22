@@ -55,7 +55,8 @@ C. Indirect Communication – Message Queues (Planned)
 3. How to Run Each Module
 
 All scripts should be run from the command line in separate terminal windows. Use python [filename] to execute.
-A. Direct Communication (IPC - TCP Sockets)
+
+A. MAIN CHAT MODULE RUN - Direct Communication (IPC - TCP Sockets) - 
 
 This demonstration requires two or more terminals for the server and client(s).
 

@@ -62,11 +62,11 @@ def join_room(room_to_join, user):
     """Will allow the user to join rooms they are interested in."""
 
     # Error message when a chatroom that does not exist is inputed
-    # Error message if name is existed
     if room_to_join not in list_of_chat_rooms:
         return f"Error: The chatroom {room_to_join} does not exist."
 
     members = list_of_chat_rooms[room_to_join]['members']
+    # Error message if name is existed
     if user in members:
         raise Fault(409, f"Error : The user {user} has already joined {room_to_join}")
 
@@ -103,8 +103,9 @@ def send_message(chatroom_name, user, message):
     
 def remove_user(chatroom_name, user):
     try: 
+        # removes user from list of members
         list_of_chat_rooms[chatroom_name]['members'].remove(user)
-        print(f"User {user} removed from {chatroom_name}.")
+        print(f"User {user} removed from {chatroom_name}.") # confirmation message sent to server-xmlrpc
     except ValueError:
         # in the case where user isnt found
         raise Fault(409, f"Error : The user {user} is not in {chatroom_name}.")
@@ -135,5 +136,5 @@ if __name__ == '__main__':
 
     except KeyboardInterrupt:
         ## Not Sucessful
-        print('Unable to connect, try again later')
+        print('Unable to connect, try again later.\nEnsure that broker.py is running in another terminal.')
 

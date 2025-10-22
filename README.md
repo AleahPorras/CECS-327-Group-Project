@@ -14,14 +14,14 @@ Dependencies
 
 This project primarily utilizes modules from the Python Standard Library, meaning no external libraries are required for the implemented Direct (IPC) and Remote (RPC) communication parts.
 
-Mechanism               Python Module Used              External Broker Required       Installation Command
-
-Direct (IPC)            socket, threading               None                           N/A
+	Mechanism               Python Module Used              External Broker Required       Installation Command
 	
-Remote (RPC)            xmlrpc.client, xmlrpc.server    None                           N/A
-	
-Indirect (Pub/Sub)      zmq, json                       No                             pip install pyzmq
-                                                        (ZMQ acts as a brokerless messaging layer)                                                      
+	Direct (IPC)            socket, threading               None                           N/A
+		
+	Remote (RPC)            xmlrpc.client, xmlrpc.server    None                           N/A
+		
+	Indirect (Pub/Sub)      zmq, json                       No                             pip install pyzmq
+	                                                        (ZMQ acts as a brokerless messaging layer)                                                      
 2. Component Purpose
 
 This section maps the source files to their specific roles within the ThisCord architecture and the communication task they fulfill.

@@ -1,4 +1,5 @@
 # CECS-327-Group-Project
+Note:  broker.py, server-xmlrpc.py, and client-xmlrpc.py are the only files you will NEED to run. Other files are for documentation and were used to understand how to implement all these forms of communication together.
 Creating a less complex chat system for small niche communities, users who care for their privacy, and students who have temporary groups for assignments.
 
 1. Requirements and Dependencies

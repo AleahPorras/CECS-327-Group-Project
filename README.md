@@ -62,11 +62,11 @@ This demonstration requires two or more terminals for the server and client(s).
     1. Start the Broker and Server (Chat Message Hub):
 
     python broker.py
-
-    (The server will listen on 127.0.0.1:5555).
+	
+    (You MUST run this first. The server will listen on 127.0.0.1:5555).
 
     python server-xmlrpc.py
-	( The server returns "Connecting to ThisCord Server...)
+	( You MUST run this second before running clients. The server returns "Connecting to ThisCord Server...)
 	
 	2. Start Client 1:
 

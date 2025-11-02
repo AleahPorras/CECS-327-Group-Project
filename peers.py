@@ -86,7 +86,7 @@ def forward(msg, exclude =None):
 
 
 def handle_msg(msg, tcp_addr):
-    # global neighbors, members
+    global neighbors, members
 
     real_addr = tuple(msg.get("addr", tcp_addr))
     if real_addr != (MY_HOST, MY_PORT):
@@ -211,7 +211,7 @@ def main():
     members.setdefault(room, set())
     members[room].add(username)
 
-    print(f"[debug] neighbors now: {neighbors}")
+    print(f"[debug] neighbors now: {members}")
 
     join_msg = {
         "type": "join",

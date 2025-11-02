@@ -15,6 +15,7 @@ room = None
 members = {}
 
 ready = threading.Event()
+handshake_done = threading.Event() # makes sure both the ping and pong are sent and recieved from bootstrap
 
 #each peer keeps a "seen" of message IDs, so peers can tell duplicates when flooding
 def new_id():
@@ -85,7 +86,7 @@ def forward(msg, exclude =None):
 
 
 def handle_msg(msg, tcp_addr):
-    global neighbors, members
+    # global neighbors, members
 
     real_addr = tuple(msg.get("addr", tcp_addr))
     if real_addr != (MY_HOST, MY_PORT):
@@ -117,7 +118,8 @@ def handle_msg(msg, tcp_addr):
     if mtype == "pong":
         # only count handshake if same room
         if room is None or msg_room is None or msg_room == room:
-            print(f"[handshake] connection established with {real_addr}")
+            print(f"\r[handshake] connection established with {real_addr}\n> ", end = "", flush = True)
+            handshake_done.set()
         return
 
     if msg_room is not None and room is not None and msg_room != room:
@@ -134,7 +136,7 @@ def handle_msg(msg, tcp_addr):
             })
             return
         members[room].add(msg_user)
-        print(f"\n{msg_user} joined {room}")
+        print(f"\r{msg_user} joined {room}\n> ", end = "", flush = True)
         return
 
     if mtype == "name_taken":
@@ -142,13 +144,13 @@ def handle_msg(msg, tcp_addr):
         sys.exit(1)
 
     if mtype == "chat":
-        print(f"\n[{msg_user}@{msg_room}] {msg['text']}")
+        print(f"\r[{msg_user}@{msg_room}] {msg['text']}\n> ", end = "", flush = True)
         return
 
     if mtype == "leave":
         if room in members:
             members[room].discard(msg_user)
-        print(f"\n {msg_user} left {room}")
+        print(f"\r{msg_user} left {room}\n> ", end = "", flush = True)
         return
 
 # read one TCP and feed all messages on it into handle_msg function
@@ -189,13 +191,23 @@ def main():
     global username, room
 
     threading.Thread(target=listener, daemon=True).start()
+    ready.wait() # waits until the thread is ready
+                 # if not ready then a racecondition will occur
+
 
     username = input("Enter your username: ").strip() or f"user{uuid.uuid4().hex[:4]}"
     room = input("Enter room name: ").strip() or "lobby"
 
-    ready.wait() # wait until listener has bound and set MY_PORT
+    # wait until listener has bound and set MY_PORT    
     bootstrap() # then can join existing peer
 
+    if not neighbors and MY_PORT != BASE_PORT:
+        print("[bootstrap] Waiting for a handshake...")
+        if not handshake_done.wait(timeout = 2):
+            print("[bootstrap] Timeout waiting for handshake.")
+
+    # ISSUE
+    # if a completely new user joins, they won't see the members that joined before them.
     members.setdefault(room, set())
     members[room].add(username)
 
@@ -212,7 +224,7 @@ def main():
     for n in list(neighbors):
         send_msg(n, join_msg)
 
-    print(f"[you are in room '{room}'] type messages below:")
+    print(f"You are in room '{room}', type messages below:")
 
     while True:
         text = input("> ").strip()

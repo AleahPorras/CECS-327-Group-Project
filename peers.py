@@ -1,0 +1,249 @@
+import socket, threading, json, sys, uuid, random
+
+
+# network configuration
+MY_HOST = "127.0.0.1"
+BASE_PORT = 5000
+MAX_PEERS = 100
+MY_PORT = None
+
+# peer state
+neighbors = set()
+seen = set()
+username = None
+room = None
+members = {}
+
+ready = threading.Event()
+
+#each peer keeps a "seen" of message IDs, so peers can tell duplicates when flooding
+def new_id():
+    return str(uuid.uuid4())
+
+# open TCP socket , send message and close
+def send_msg(addr, obj):
+    h, p = addr
+    try:
+        s = socket.socket()
+        s.connect((h, p))
+        s.sendall((json.dumps(obj) + "\n").encode())
+        s.close()
+    except OSError:
+        pass
+
+# first contact of a new peer to the network
+# sends a ping to known peer, and that peer answer with pong and both added to their neighbors
+# look for a running peer , if none is found, it is the first peer
+def bootstrap():
+
+    if MY_PORT == BASE_PORT:
+        print("[bootstrap] I am the first peer, starting new network")
+        return
+
+    if MY_PORT is None:
+        return
+
+    found = False
+
+    ports = list(range(BASE_PORT, BASE_PORT + MAX_PEERS))
+    random.shuffle(ports)
+
+    for port in ports:
+        if port == MY_PORT:
+            continue
+        try:
+            s = socket.create_connection((MY_HOST, port), timeout=0.5)
+            s.close()
+            msg = {
+                "type": "ping",
+                "msg_id": new_id(),
+                "addr": [MY_HOST, MY_PORT],
+                "room": room,
+                "ttl": 5,   # the message can be forwarded at most 5 hops.
+            }
+            send_msg((MY_HOST, port), msg)
+            print(f"[bootstrap] connected to existing peer at {MY_HOST}:{port}")
+            found = True
+            break
+        except OSError:
+            continue
+
+    if not found:
+        print("[bootstrap] no existing peers found; starting new network")
+
+# flood a message to all neighbors except the one you know
+def forward(msg, exclude =None):
+    ttl = msg.get("ttl", 0)
+    if ttl <= 0:
+        return
+    msg = dict(msg)
+    msg["ttl"] = ttl - 1
+    for n in list(neighbors):
+        if exclude and n == exclude:
+            continue
+        send_msg(n, msg)
+
+
+def handle_msg(msg, tcp_addr):
+    global neighbors, members
+
+    real_addr = tuple(msg.get("addr", tcp_addr))
+    if real_addr != (MY_HOST, MY_PORT):
+        neighbors.add(real_addr)
+
+    # drop duplicates
+    mid = msg.get("msg_id")
+    if mid in seen:
+        return
+    seen.add(mid)
+
+    mtype    = msg.get("type")
+    msg_room = msg.get("room")
+    msg_user = msg.get("user")
+
+    if mtype == "ping":
+        # only reply to pings for my room
+        if room is not None and msg_room is not None and msg_room != room:
+            return
+        send_msg(real_addr, {
+            "type": "pong",
+            "msg_id": new_id(),
+            "addr": [MY_HOST, MY_PORT],
+            "room": room,
+        })
+        forward(msg, exclude=real_addr)
+        return
+
+    if mtype == "pong":
+        # only count handshake if same room
+        if room is None or msg_room is None or msg_room == room:
+            print(f"[handshake] connection established with {real_addr}")
+        return
+
+    if msg_room is not None and room is not None and msg_room != room:
+        return
+
+    if mtype == "join":
+        members.setdefault(room, set())
+        if msg_user in members[room]:
+            send_msg(real_addr, {
+                "type": "name_taken",
+                "msg_id": new_id(),
+                "room": room,
+                "user": msg_user,
+            })
+            return
+        members[room].add(msg_user)
+        print(f"\n{msg_user} joined {room}")
+        return
+
+    if mtype == "name_taken":
+        print("[error] username already in use in this room. exiting...")
+        sys.exit(1)
+
+    if mtype == "chat":
+        print(f"\n[{msg_user}@{msg_room}] {msg['text']}")
+        return
+
+    if mtype == "leave":
+        if room in members:
+            members[room].discard(msg_user)
+        print(f"\n {msg_user} left {room}")
+        return
+
+# read one TCP and feed all messages on it into handle_msg function
+def handle_conn(conn, addr):
+    with conn:
+        data = conn.recv(4096)
+    for line in data.splitlines():
+        if not line:
+            continue
+        msg = json.loads(line.decode())
+        handle_msg(msg, addr)
+
+# binds to host/port listen forever act like a server
+def listener():
+    global MY_PORT
+    s = socket.socket()
+    #s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR,
+
+    # pick the first free port starting at BASE_PORT
+    for port in range(BASE_PORT, BASE_PORT + MAX_PEERS):
+        try:
+            s.bind((MY_HOST, port))
+            MY_PORT = port
+            break
+        except OSError:
+            continue
+
+    s.listen(100)
+    print(f"[listen] {MY_HOST}:{MY_PORT}")
+    ready.set()
+
+    while True:
+        c, a = s.accept() # loop so peer is always reachable
+        threading.Thread(target=handle_conn, args=(c, a), daemon=True).start()
+
+
+def main():
+    global username, room
+
+    threading.Thread(target=listener, daemon=True).start()
+
+    username = input("Enter your username: ").strip() or f"user{uuid.uuid4().hex[:4]}"
+    room = input("Enter room name: ").strip() or "lobby"
+
+    ready.wait() # wait until listener has bound and set MY_PORT
+    bootstrap() # then can join existing peer
+
+    members.setdefault(room, set())
+    members[room].add(username)
+
+    print(f"[debug] neighbors now: {neighbors}")
+
+    join_msg = {
+        "type": "join",
+        "msg_id": new_id(),
+        "user": username,
+        "room": room,
+        "addr": [MY_HOST, MY_PORT],
+        "ttl": 5,
+    }
+    for n in list(neighbors):
+        send_msg(n, join_msg)
+
+    print(f"[you are in room '{room}'] type messages below:")
+
+    while True:
+        text = input("> ").strip()
+        if not text:
+            continue
+
+        if text.lower() in ("exit", "quit"):
+            leave_msg = {
+                "type": "leave",
+                "msg_id": new_id(),
+                "user": username,
+                "room": room,
+                "addr": [MY_HOST, MY_PORT],
+                "ttl": 5,
+            }
+            for n in list(neighbors):
+                send_msg(n, leave_msg)
+            print("exiting...")
+            break
+
+        msg = {
+            "type": "chat",
+            "msg_id": new_id(),
+            "user": username,
+            "room": room,
+            "text": text,
+            "addr": [MY_HOST, MY_PORT],
+            "ttl": 5,
+        }
+        for n in list(neighbors):
+            send_msg(n, msg)
+
+if __name__ == "__main__":
+    main()

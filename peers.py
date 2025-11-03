@@ -9,10 +9,13 @@ MY_PORT = None
 
 # peer state
 neighbors = set()
+neighbors_lock = threading.Lock()
 seen = set()
+seen_lock = threading.Lock()
 username = None
 room = None
 members = {}
+members_lock = threading.Lock()
 
 ready = threading.Event()
 handshake_done = threading.Event() # makes sure both the ping and pong are sent and recieved from bootstrap
@@ -79,10 +82,12 @@ def forward(msg, exclude =None):
         return
     msg = dict(msg)
     msg["ttl"] = ttl - 1
-    for n in list(neighbors):
+    with neighbors_lock:
+        copy_list = list(neighbors)
+    for n in copy_list:
         if exclude and n == exclude:
             continue
-        send_msg(n, msg)
+    send_msg(n, msg)
 
 
 def handle_msg(msg, tcp_addr):
@@ -90,13 +95,15 @@ def handle_msg(msg, tcp_addr):
 
     real_addr = tuple(msg.get("addr", tcp_addr))
     if real_addr != (MY_HOST, MY_PORT):
-        neighbors.add(real_addr)
+        with neighbors_lock:
+            neighbors.add(real_addr)
 
     # drop duplicates
     mid = msg.get("msg_id")
-    if mid in seen:
-        return
-    seen.add(mid)
+    with seen_lock: 
+        if mid in seen:
+            return
+        seen.add(mid)
 
     mtype    = msg.get("type")
     msg_room = msg.get("room")
@@ -126,18 +133,19 @@ def handle_msg(msg, tcp_addr):
         return
 
     if mtype == "join":
-        members.setdefault(room, set())
-        if msg_user in members[room]:
-            send_msg(real_addr, {
-                "type": "name_taken",
-                "msg_id": new_id(),
-                "room": room,
-                "user": msg_user,
-            })
+        with members_lock:
+            members.setdefault(room, set())
+            if msg_user in members[room]:
+                send_msg(real_addr, {
+                    "type": "name_taken",
+                    "msg_id": new_id(),
+                    "room": room,
+                    "user": msg_user,
+                })
+                return
+            members[room].add(msg_user)
+            print(f"\r{msg_user} joined {room}\n> ", end = "", flush = True)
             return
-        members[room].add(msg_user)
-        print(f"\r{msg_user} joined {room}\n> ", end = "", flush = True)
-        return
 
     if mtype == "name_taken":
         print("[error] username already in use in this room. exiting...")
@@ -148,10 +156,11 @@ def handle_msg(msg, tcp_addr):
         return
 
     if mtype == "leave":
-        if room in members:
-            members[room].discard(msg_user)
-        print(f"\r{msg_user} left {room}\n> ", end = "", flush = True)
-        return
+        with members_lock:
+            if room in members:
+                members[room].discard(msg_user)
+            print(f"\r{msg_user} left {room}\n> ", end = "", flush = True)
+            return
 
 # read one TCP and feed all messages on it into handle_msg function
 def handle_conn(conn, addr):
@@ -200,18 +209,19 @@ def main():
 
     # wait until listener has bound and set MY_PORT    
     bootstrap() # then can join existing peer
-
-    if not neighbors and MY_PORT != BASE_PORT:
-        print("[bootstrap] Waiting for a handshake...")
-        if not handshake_done.wait(timeout = 2):
-            print("[bootstrap] Timeout waiting for handshake.")
+    with neighbors_lock:
+        if not neighbors and MY_PORT != BASE_PORT:
+            print("[bootstrap] Waiting for a handshake...")
+            if not handshake_done.wait(timeout = 2):
+                print("[bootstrap] Timeout waiting for handshake.")
 
     # ISSUE
     # if a completely new user joins, they won't see the members that joined before them.
-    members.setdefault(room, set())
-    members[room].add(username)
+    with members_lock:
+        members.setdefault(room, set())
+        members[room].add(username)
 
-    print(f"[debug] neighbors now: {members}")
+        print(f"[debug] neighbors now: {members}")
 
     join_msg = {
         "type": "join",
@@ -221,7 +231,9 @@ def main():
         "addr": [MY_HOST, MY_PORT],
         "ttl": 5,
     }
-    for n in list(neighbors):
+    with neighbors_lock:
+        copy_list = list(neighbors)
+    for n in copy_list:
         send_msg(n, join_msg)
 
     print(f"You are in room '{room}', type messages below:")
@@ -240,7 +252,9 @@ def main():
                 "addr": [MY_HOST, MY_PORT],
                 "ttl": 5,
             }
-            for n in list(neighbors):
+            with neighbors_lock:
+                copy_list = list(neighbors)
+            for n in copy_list:
                 send_msg(n, leave_msg)
             print("exiting...")
             break
@@ -254,7 +268,9 @@ def main():
             "addr": [MY_HOST, MY_PORT],
             "ttl": 5,
         }
-        for n in list(neighbors):
+        with neighbors_lock:
+            copy_list = list(neighbors)
+        for n in copy_list:
             send_msg(n, msg)
 
 if __name__ == "__main__":

@@ -125,6 +125,17 @@ def handle_msg(msg, tcp_addr):
             "addr": [MY_HOST, MY_PORT],
             "room": room,
         })
+        # focuses on sending current members to all new peers
+        with members_lock:
+            if members: # runs if there are other members available
+                members_json = {room: list(users) for room, users in members.items()} # keeps track of all the current members
+                send_msg(real_addr, {
+                    "type": "member_sync",
+                    "msg_id": new_id(),
+                    "addr": [MY_HOST, MY_PORT],
+                    "members": members_json, # returns the entire dictionary
+                 })
+                
         with rooms_lock:
             if all_rooms:
                 send_msg(real_addr, {
@@ -137,6 +148,8 @@ def handle_msg(msg, tcp_addr):
         forward(msg, exclude=real_addr)
         return
 
+    ## Handler functions
+
     if mtype == "pong":
         # only count handshake if same room
         if room is None or msg_room is None or msg_room == room:
@@ -144,6 +157,13 @@ def handle_msg(msg, tcp_addr):
             handshake_done.set()
         return
     
+    if mtype == "member_sync":
+        synced_members = msg.get("members",{}) # gets member from each peer
+        with members_lock:
+            for room, user_set in synced_members.items():
+                members.setdefault(room, set()).update(user_set) # merges the current member dictionary with the peer's
+        return
+
     if mtype == "room_announce":
         announced_rooms = msg.get("rooms", [])
         with rooms_lock:

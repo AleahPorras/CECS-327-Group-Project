@@ -1,4 +1,4 @@
-import socket, threading, json, sys, uuid, random
+import socket, threading, json, sys, uuid, random, time
 
 
 # network configuration
@@ -16,6 +16,10 @@ username = None
 room = None
 members = {}
 members_lock = threading.Lock()
+
+# room management
+all_rooms = set()
+rooms_lock = threading.Lock()
 
 ready = threading.Event()
 handshake_done = threading.Event() # makes sure both the ping and pong are sent and recieved from bootstrap
@@ -121,6 +125,15 @@ def handle_msg(msg, tcp_addr):
             "addr": [MY_HOST, MY_PORT],
             "room": room,
         })
+        with rooms_lock:
+            if all_rooms:
+                send_msg(real_addr, {
+                    "type": "room_announce",
+                    "msg_id": new_id(),
+                    "addr": [MY_HOST, MY_PORT],
+                    "rooms": list(all_rooms),
+                    "ttl": 3,
+                })
         forward(msg, exclude=real_addr)
         return
 
@@ -130,24 +143,49 @@ def handle_msg(msg, tcp_addr):
             print(f"\r[handshake] connection established with {real_addr}\n> ", end = "", flush = True)
             handshake_done.set()
         return
+    
+    if mtype == "room_announce":
+        announced_rooms = msg.get("rooms", [])
+        with rooms_lock:
+            for r in announced_rooms:
+                all_rooms.add(r)
+        return
+    
+    if mtype == "room_query":
+        with rooms_lock:
+            send_msg(real_addr, {
+                "type": "room_response",
+                "msg_id": new_id(),
+                "addr": [MY_HOST, MY_PORT],
+                "rooms": list(all_rooms),
+            })
+        return
+    
+    if mtype == "room_response":
+        rooms = msg.get("rooms", [])
+        with rooms_lock:
+            all_rooms.update(rooms)
+        return
 
     if msg_room is not None and room is not None and msg_room != room:
         return
 
     if mtype == "join":
         with members_lock:
-            members.setdefault(room, set())
-            if msg_user in members[room]:
+            members.setdefault(msg_room, set())
+            if msg_user in members[msg_room]:
                 send_msg(real_addr, {
                     "type": "name_taken",
                     "msg_id": new_id(),
-                    "room": room,
+                    "room": msg_room,
                     "user": msg_user,
                 })
                 return
-            members[room].add(msg_user)
-            print(f"\r{msg_user} joined {room}\n> ", end = "", flush = True)
+            members[msg_room].add(msg_user)
+            print(f"\r{msg_user} joined {msg_room}\n> ", end = "", flush = True)
             # return
+        with rooms_lock:
+            all_rooms.add(msg_room)
 
     if mtype == "name_taken":
         print("[error] username already in use in this room. exiting...")
@@ -199,25 +237,47 @@ def listener():
         c, a = s.accept() # loop so peer is always reachable
         threading.Thread(target=handle_conn, args=(c, a), daemon=True).start()
 
+def query_rooms():
+    msg = {
+        "type": "room_query",
+        "msg_id": new_id(),
+        "addr": [MY_HOST, MY_PORT],
+        "ttl": 3,
+    }
+    forward(msg)
+    time.sleep(2)
+    
+    with rooms_lock:
+        return list(all_rooms)
 
 def main():
     global username, room
 
     threading.Thread(target=listener, daemon=True).start()
-    ready.wait() # waits until the thread is ready
-                 # if not ready then a racecondition will occur
-
+    ready.wait()
 
     username = input("Enter your username: ").strip() or f"user{uuid.uuid4().hex[:4]}"
-    room = input("Enter room name: ").strip() or "lobby"
-
-    # wait until listener has bound and set MY_PORT    
-    bootstrap() # then can join existing peer
+    bootstrap()
+    
     with neighbors_lock:
         if not neighbors and MY_PORT != BASE_PORT:
             print("[bootstrap] Waiting for a handshake...")
-            if not handshake_done.wait(timeout = 5):
+            if not handshake_done.wait(timeout=5):
                 print("[bootstrap] Timeout waiting for handshake.")
+    
+    print("\nQuerying network for available rooms...")
+    available_rooms = query_rooms()
+    
+    if available_rooms:
+        print("\nAvailable rooms:")
+        for idx, r in enumerate(available_rooms, 1):
+            with members_lock:
+                member_count = len(members.get(r, set()))
+            print(f"  {idx}. {r} ({member_count} members)")
+    else:
+        print("No rooms found. You can create a new one!")
+    
+    room = input("\nEnter room name: ").strip() or "lobby"
 
     # ISSUE
     # if a completely new user joins, they won't see the members that joined before them.
@@ -226,6 +286,9 @@ def main():
         members[room].add(username)
 
         print(f"[debug] neighbors now: {members}")
+
+    with rooms_lock:
+        all_rooms.add(room)
 
     join_msg = {
         "type": "join",
@@ -241,7 +304,14 @@ def main():
     #     send_msg(n, join_msg)
     forward(join_msg)
 
-    print(f"You are in room '{room}', type messages below:")
+    room_announce = {
+        "type": "room_announce",
+        "msg_id": new_id(),
+        "addr": [MY_HOST, MY_PORT],
+        "rooms": [room],
+        "ttl": 3,
+    }
+    forward(room_announce)
 
     while True:
         text = input("> ").strip()

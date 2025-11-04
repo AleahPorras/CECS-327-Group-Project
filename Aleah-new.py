@@ -356,7 +356,7 @@ def main():
             if not text:
                 continue
 
-            if text.lower() in ("exit", "quit") or KeyboardInterrupt:
+            if text.lower() in ("exit", "quit"):
                 leave_msg = {
                     "type": "leave",
                     "msg_id": new_id(),

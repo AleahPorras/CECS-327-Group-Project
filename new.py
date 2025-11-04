@@ -17,10 +17,6 @@ room = None
 members = {}
 members_lock = threading.Lock()
 
-# Tracks consecutive failures for each neighbor address
-neighbor_failures = {}
-MAX_FAILURES = 3
-
 # room management
 all_rooms = set()
 rooms_lock = threading.Lock()
@@ -32,7 +28,7 @@ handshake_done = threading.Event() # makes sure both the ping and pong are sent 
 def new_id():
     return str(uuid.uuid4())
 
-# open TCP socket , send message and close (includes Dead Peer Detection    )
+# open TCP socket , send message and close
 def send_msg(addr, obj):
     h, p = addr
     try:
@@ -40,23 +36,7 @@ def send_msg(addr, obj):
         s.connect((h, p))
         s.sendall((json.dumps(obj) + "\n").encode())
         s.close()
-
-        # If successful, reset failure count
-        with neighbors_lock:
-            neighbor_failures.pop(addr, None)
-    except OSError as e:
-        # Connection or send failed, this peer might be dead
-        with neighbors_lock:
-            # Increment failure count
-            neighbor_failures[addr] = neighbor_failures.get(addr, 0) + 1
-            print(f"[dead peer check] Connection to {addr} failed ({neighbor_failures[addr]}/{MAX_FAILURES}).")
-            
-            # Remove peer if max failures reached
-            if neighbor_failures[addr] >= MAX_FAILURES:
-                print(f"[dead peer check] Removing dead peer: {addr}")
-                neighbors.discard(addr)
-                neighbor_failures.pop(addr, None)
-        # We catch and silence the error here, ensuring the app doesn't crash
+    except OSError:
         pass
 
 # first contact of a new peer to the network
@@ -72,6 +52,7 @@ def bootstrap():
         return
 
     found = False
+
     ports = list(range(BASE_PORT, BASE_PORT + MAX_PEERS))
     random.shuffle(ports)
 
@@ -111,72 +92,26 @@ def forward(msg, exclude =None):
         if exclude and n == exclude:
             continue
         send_msg(n, msg)
-#Proactive Dead Peer Checking
-def dead_peer_checker():
-    """Periodically pings all neighbors to check for liveness."""
-    while True:
-        time.sleep(10) # Check every 10 seconds
-        
-        with neighbors_lock:
-            if not neighbors:
-                continue
-            peers_to_check = list(neighbors)
 
-        # Send a health check ping to all neighbors
-        for peer_addr in peers_to_check:
-            # Skip if already marked for deletion in the send_msg logic
-            if neighbor_failures.get(peer_addr, 0) >= MAX_FAILURES:
-                continue
-                
-            ping_msg = {
-                "type": "ping",
-                "msg_id": new_id(),
-                "addr": [MY_HOST, MY_PORT],
-                "room": room, # Use current room context
-                "ttl": 1, # Only one hop is needed for a health check
-            }
-            send_msg(peer_addr, ping_msg)
-        
-        # After the check, clean up any failed peers that were handled by send_msg
-        with neighbors_lock:
-            # Explicit removal check after sending pings (redundant but safe)
-            for addr, failures in list(neighbor_failures.items()):
-                if failures >= MAX_FAILURES:
-                    neighbors.discard(addr)
-                    neighbor_failures.pop(addr)
 
 def handle_msg(msg, tcp_addr):
     global neighbors, members
 
-    # --- Robust Parsing and Validation ---
-    try:
-        real_addr = tuple(msg.get("addr", tcp_addr))
-        if len(real_addr) != 2:
-             print(f"[error] Invalid address format received: {real_addr}")
-             return
-             
-        mid = msg.get("msg_id")
-        mtype = msg.get("type")
-        msg_room = msg.get("room")
-        msg_user = msg.get("user")
-    except Exception as e:
-        print(f"[error] Failed to parse message fields: {e}")
-        return
-        
-    # 1. Add sender as neighbor (unless it's myself)
+    real_addr = tuple(msg.get("addr", tcp_addr))
     if real_addr != (MY_HOST, MY_PORT):
         with neighbors_lock:
             neighbors.add(real_addr)
-            # If a message is received, reset failure tracking
-            neighbor_failures.pop(real_addr, None)
 
-    # 2. Drop duplicates
+    # drop duplicates
+    mid = msg.get("msg_id")
     with seen_lock: 
         if mid in seen:
             return
-        # Only add to seen if it's a message that should be forwarded/processed
-        if mtype not in ("pong", "room_response", "member_sync"):
-            seen.add(mid)
+        seen.add(mid)
+
+    mtype    = msg.get("type")
+    msg_room = msg.get("room")
+    msg_user = msg.get("user")
 
     # if mtype not in ("ping", "pong", "name_taken"):
     #     forward(msg, exclude=real_addr)
@@ -232,9 +167,8 @@ def handle_msg(msg, tcp_addr):
     if mtype == "room_announce":
         announced_rooms = msg.get("rooms", [])
         with rooms_lock:
-            all_rooms.update(announced_rooms)
-        # Forward, as this is a broadcast type message
-        forward(msg, exclude=real_addr)
+            for r in announced_rooms:
+                all_rooms.add(r)
         return
     
     if mtype == "room_query":
@@ -245,7 +179,6 @@ def handle_msg(msg, tcp_addr):
                 "addr": [MY_HOST, MY_PORT],
                 "rooms": list(all_rooms),
             })
-        forward(msg, exclude=real_addr)
         return
     
     if mtype == "room_response":
@@ -261,7 +194,6 @@ def handle_msg(msg, tcp_addr):
         with members_lock:
             members.setdefault(msg_room, set())
             if msg_user in members[msg_room]:
-                # Send explicit name_taken error back to sender
                 send_msg(real_addr, {
                     "type": "name_taken",
                     "msg_id": new_id(),
@@ -271,13 +203,9 @@ def handle_msg(msg, tcp_addr):
                 return
             members[msg_room].add(msg_user)
             print(f"\r{msg_user} joined {msg_room}\n> ", end = "", flush = True)
-        
+            # return
         with rooms_lock:
             all_rooms.add(msg_room)
-        
-        # Forward JOIN message
-        forward(msg, exclude=real_addr)
-        return
 
     if mtype == "name_taken":
         print("[error] username already in use in this room. exiting...")
@@ -285,43 +213,32 @@ def handle_msg(msg, tcp_addr):
 
     if mtype == "chat":
         print(f"\r[{msg_user}@{msg_room}] {msg['text']}\n> ", end = "", flush = True)
-        forward(msg, exclude=real_addr)
-        return
+        # return
 
     if mtype == "leave":
         with members_lock:
-            if msg_room in members:
-                members[msg_room].discard(msg_user)
-            print(f"\r{msg_user} left {msg_room}\n> ", end = "", flush = True)
-            
+            if room in members:
+                members[room].discard(msg_user)
+            print(f"\r{msg_user} left {room}\n> ", end = "", flush = True)
+            # return
+    if mtype not in ("ping", "pong", "name_taken"):
         forward(msg, exclude=real_addr)
-        return
 
 # read one TCP and feed all messages on it into handle_msg function
 def handle_conn(conn, addr):
     with conn:
-        try:
-            data = conn.recv(4096)
-        except OSError as e:
-            print(f"[listener error] Failed to receive data from {addr}: {e}")
-            return # Exit thread on receive error
-            
+        data = conn.recv(4096)
     for line in data.splitlines():
         if not line:
             continue
-        try:
-            msg = json.loads(line.decode())
-            handle_msg(msg, addr)
-        except json.JSONDecodeError:
-            print(f"[listener error] Received malformed JSON from {addr}")
-        except Exception as e:
-            print(f"[listener error] Unhandled exception processing message from {addr}: {e}")
+        msg = json.loads(line.decode())
+        handle_msg(msg, addr)
 
 # binds to host/port listen forever act like a server
 def listener():
     global MY_PORT
     s = socket.socket()
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) # Added reuse address option
+    #s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR,
 
     # pick the first free port starting at BASE_PORT
     for port in range(BASE_PORT, BASE_PORT + MAX_PEERS):
@@ -331,26 +248,16 @@ def listener():
             break
         except OSError:
             continue
-            
-    if MY_PORT is None:
-        print("[error] Could not find a free port! Exiting.")
-        sys.exit(1)
 
     s.listen(100)
     print(f"[listen] {MY_HOST}:{MY_PORT}")
     ready.set()
 
     while True:
-        try:
-            c, a = s.accept() # loop so peer is always reachable
-            threading.Thread(target=handle_conn, args=(c, a), daemon=True).start()
-        except Exception as e:
-            print(f"[listener error] Main accept loop failed: {e}")
-            time.sleep(1) # Wait a moment before retrying accept
-
+        c, a = s.accept() # loop so peer is always reachable
+        threading.Thread(target=handle_conn, args=(c, a), daemon=True).start()
 
 def query_rooms():
-    """Broadcasts a query to find all available rooms on the network."""
     msg = {
         "type": "room_query",
         "msg_id": new_id(),
@@ -358,34 +265,25 @@ def query_rooms():
         "ttl": 3,
     }
     forward(msg)
-    time.sleep(2) # Give time for room_response messages to arrive
+    time.sleep(2)
     
     with rooms_lock:
-        return sorted(list(all_rooms))
+        return list(all_rooms)
 
 def main():
     global username, room
 
-    # Start the listener and dead peer checker threads
     threading.Thread(target=listener, daemon=True).start()
-    threading.Thread(target=dead_peer_checker, daemon=True).start()
-    
     ready.wait()
 
-    # --- Robust Input Handling ---
-    try:
-        username = input("Enter your username: ").strip() or f"user{uuid.uuid4().hex[:4]}"
-    except EOFError:
-        print("\nInput cancelled. Exiting.")
-        sys.exit(0)
-    
+    username = input("Enter your username: ").strip() or f"user{uuid.uuid4().hex[:4]}"
     bootstrap()
     
     with neighbors_lock:
         if not neighbors and MY_PORT != BASE_PORT:
             print("[bootstrap] Waiting for a handshake...")
             if not handshake_done.wait(timeout=5):
-                print("[bootstrap] Timeout waiting for handshake. Continuing as isolated node.")
+                print("[bootstrap] Timeout waiting for handshake.")
     
     print("\nQuerying network for available rooms...")
     available_rooms = query_rooms()
@@ -399,12 +297,7 @@ def main():
     else:
         print("No rooms found. You can create a new one!")
     
-    # --- Robust Input Handling for room name ---
-    try:
-        room = input("\nEnter room name: ").strip() or "lobby"
-    except EOFError:
-        print("\nInput cancelled. Exiting.")
-        sys.exit(0)
+    room = input("\nEnter room name: ").strip() or "lobby"
 
     # ISSUE
     # if a completely new user joins, they won't see the members that joined before them.
@@ -417,7 +310,6 @@ def main():
     with rooms_lock:
         all_rooms.add(room)
 
-    # Send JOIN message
     join_msg = {
         "type": "join",
         "msg_id": new_id(),
@@ -441,14 +333,8 @@ def main():
     }
     forward(room_announce)
 
-    print(f"\n--- You are in room '{room}', type messages below. Type 'exit' to quit. ---")
-
     while True:
-        try:
-            text = input("> ").strip()
-        except EOFError:
-            text = "quit"
-            
+        text = input("> ").strip()
         if not text:
             continue
 

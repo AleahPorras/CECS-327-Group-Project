@@ -44,7 +44,7 @@ def network(port):
     if peer_found.is_set():
         return
     try:
-        s = socket.create_connection((MY_HOST, port), timeout = 0.5)
+        s = socket.create_connection((MY_HOST, port), timeout = 5)
         s.close()
 
         peer_found.set()
@@ -77,49 +77,23 @@ def bootstrap():
     if MY_PORT is None:
         return
 
-    # found = False
-
     ports = list(range(BASE_PORT, BASE_PORT + MAX_PEERS))
     random.shuffle(ports)
-
     threads = []
 
     for port in ports:
         if port == MY_PORT:
             continue
-
-        # if peer_found.is_set():
-        #     break
-
+        
         t = threading.Thread(target = network, args = (port,), daemon= True)
         t.start()
         threads.append(t)
-        # try:
-        #     s = socket.create_connection((MY_HOST, port), timeout=0.5)
-        #     s.close()
-        #     msg = {
-        #         "type": "ping",
-        #         "msg_id": new_id(),
-        #         "addr": [MY_HOST, MY_PORT],
-        #         "room": room,
-        #         "ttl": 5,   # the message can be forwarded at most 5 hops.
-        #     }
-        #     send_msg((MY_HOST, port), msg)
-        #     print(f"[bootstrap] connected to existing peer at {MY_HOST}:{port}")
-        #     found = True
-        #     # break
-        # except OSError:
-        #     continue
+        
     for t in threads:
         t.join()
 
     if not peer_found.is_set():
         print("[bootstrap] no existing peers found; starting a new network.")
-
-    # if not found:
-    #     print("[bootstrap] no existing peers found; starting new network")
-
-
 
 # flood a message to all neighbors except the one you know
 def forward(msg, exclude =None):
@@ -134,7 +108,6 @@ def forward(msg, exclude =None):
         if exclude and n == exclude:
             continue
         send_msg(n, msg)
-
 
 def handle_msg(msg, tcp_addr):
     global neighbors, members
@@ -155,8 +128,6 @@ def handle_msg(msg, tcp_addr):
     msg_room = msg.get("room")
     msg_user = msg.get("user")
 
-    # if mtype not in ("ping", "pong", "name_taken"):
-    #     forward(msg, exclude=real_addr)
     if mtype == "ping":
         # only reply to pings for my room
         if room is not None and msg_room is not None and msg_room != room:
@@ -191,7 +162,6 @@ def handle_msg(msg, tcp_addr):
         return
 
     ## Handler functions
-
     if mtype == "pong":
         # only count handshake if same room
         if room is None or msg_room is None or msg_room == room:
@@ -243,15 +213,12 @@ def handle_msg(msg, tcp_addr):
                     "user": msg_user,
                 })
                 return
+         
             members[msg_room].add(msg_user)
             print(f"\r{msg_user} joined {msg_room}\n> ", end = "", flush = True)
             # return
         with rooms_lock:
             all_rooms.add(msg_room)
-
-    if mtype == "name_taken":
-        print("[error] username already in use in this room. exiting...")
-        sys.exit(1)
 
     if mtype == "chat":
         print(f"\r[{msg_user}@{msg_room}] {msg['text']}\n> ", end = "", flush = True)
@@ -341,10 +308,13 @@ def main():
     
     room = input("\nEnter room name: ").strip() or "lobby"
 
-    # ISSUE
+    # Fixed ISSUE
     # if a completely new user joins, they won't see the members that joined before them.
     with members_lock:
         members.setdefault(room, set())
+        while username in members[room]:
+            username = input("[ACTION NEEDED] User already has this name, enter a new one: ")
+
         members[room].add(username)
 
         print(f"[debug] neighbors now: {members}")
@@ -360,10 +330,6 @@ def main():
         "addr": [MY_HOST, MY_PORT],
         "ttl": 5,
     }
-    # with neighbors_lock:
-    #     copy_list = list(neighbors)
-    # for n in copy_list:
-    #     send_msg(n, join_msg)
     forward(join_msg)
 
     room_announce = {
@@ -389,14 +355,9 @@ def main():
                 "addr": [MY_HOST, MY_PORT],
                 "ttl": 5,
             }
-            # with neighbors_lock:
-            #     copy_list = list(neighbors)
-            # for n in copy_list:
-            #     send_msg(n, leave_msg)
             forward(leave_msg)
             print("exiting...")
             break
-        
 
         msg = {
             "type": "chat",
@@ -407,10 +368,6 @@ def main():
             "addr": [MY_HOST, MY_PORT],
             "ttl": 5,
         }
-        # with neighbors_lock:
-        #     copy_list = list(neighbors)
-        # for n in copy_list:
-        #     send_msg(n, msg)
         forward(msg)
 
 if __name__ == "__main__":

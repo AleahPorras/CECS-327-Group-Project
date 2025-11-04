@@ -199,7 +199,10 @@ def handle_msg(msg, tcp_addr):
             all_rooms.update(rooms)
         return
 
-    if msg_room is not None and room is not None and msg_room != room:
+    # if msg_room is not None and room is not None and msg_room != room:
+    #     return
+    if msg_room is not None and msg_room != room:
+        forward(msg, exclude = real_addr)
         return
 
     if mtype == "join":
@@ -213,10 +216,10 @@ def handle_msg(msg, tcp_addr):
                     "user": msg_user,
                 })
                 return
-         
+
             members[msg_room].add(msg_user)
             print(f"\r{msg_user} joined {msg_room}\n> ", end = "", flush = True)
-            # return
+            
         with rooms_lock:
             all_rooms.add(msg_room)
 
@@ -230,8 +233,8 @@ def handle_msg(msg, tcp_addr):
                 members[msg_room].discard(msg_user)
         if room == msg_room:
             print(f"\r{msg_user} left {msg_room}\n> ", end = "", flush = True)
-            # return
-    if mtype not in ("ping", "pong", "name_taken"):
+            return
+    if mtype not in ("ping", "pong", "room_response", "room_query", "member_synnc"):
         forward(msg, exclude=real_addr)
 
 # read one TCP and feed all messages on it into handle_msg function
@@ -292,7 +295,7 @@ def main():
     with neighbors_lock:
         if not neighbors and MY_PORT != BASE_PORT:
             print("[bootstrap] Waiting for a handshake...")
-            if not handshake_done.wait():#timeout=5):
+            if not handshake_done.wait(timeout=5):
                 print("[bootstrap] Timeout waiting for handshake.")
     
     print("\nQuerying network for available rooms...")
@@ -311,7 +314,7 @@ def main():
     answer = input(f"Is this the room you want to join? Check spellling. (y/n): ")
     while answer.lower()== 'n' or answer.lower() == 'no': 
         room = input("\nEnter room name: ").strip() or "lobby"
-        answer = input(f"{room} Is this the room you want to join? Check spellling. (y/n): ")
+        answer = input(f"Is this the room you want to join? Check spellling. (y/n): ")
 
 
     # Fixed ISSUE
@@ -348,33 +351,47 @@ def main():
     forward(room_announce)
 
     while True:
-        text = input("> ").strip()
-        if not text:
-            continue
+        try:
+            text = input("> ").strip()
+            if not text:
+                continue
 
-        if text.lower() in ("exit", "quit"):
-            leave_msg = {
-                "type": "leave",
+            if text.lower() in ("exit", "quit"):
+                leave_msg = {
+                    "type": "leave",
+                    "msg_id": new_id(),
+                    "user": username,
+                    "room": room,
+                    "addr": [MY_HOST, MY_PORT],
+                    "ttl": 5,
+                }
+                forward(leave_msg)
+                print("exiting...")
+                break
+
+            msg = {
+                "type": "chat",
                 "msg_id": new_id(),
                 "user": username,
                 "room": room,
+                "text": text,
                 "addr": [MY_HOST, MY_PORT],
                 "ttl": 5,
             }
+            forward(msg)
+        except KeyboardInterrupt:
+            print("\nKeyboard Interrupt detected.\nUser forcefully exited program.")
+            leave_msg = {
+                    "type": "leave",
+                    "msg_id": new_id(),
+                    "user": username,
+                    "room": room,
+                    "addr": [MY_HOST, MY_PORT],
+                    "ttl": 5,
+                }
             forward(leave_msg)
-            print("exiting...")
             break
-
-        msg = {
-            "type": "chat",
-            "msg_id": new_id(),
-            "user": username,
-            "room": room,
-            "text": text,
-            "addr": [MY_HOST, MY_PORT],
-            "ttl": 5,
-        }
-        forward(msg)
+            
 
 if __name__ == "__main__":
     main()

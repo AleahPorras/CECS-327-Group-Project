@@ -226,9 +226,10 @@ def handle_msg(msg, tcp_addr):
 
     if mtype == "leave":
         with members_lock:
-            if room in members:
-                members[room].discard(msg_user)
-            print(f"\r{msg_user} left {room}\n> ", end = "", flush = True)
+            if msg_room in members:
+                members[msg_room].discard(msg_user)
+        if room == msg_room:
+            print(f"\r{msg_user} left {msg_room}\n> ", end = "", flush = True)
             # return
     if mtype not in ("ping", "pong", "name_taken"):
         forward(msg, exclude=real_addr)

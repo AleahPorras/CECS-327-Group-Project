@@ -291,7 +291,7 @@ def main():
     with neighbors_lock:
         if not neighbors and MY_PORT != BASE_PORT:
             print("[bootstrap] Waiting for a handshake...")
-            if not handshake_done.wait(timeout=5):
+            if not handshake_done.wait():#timeout=5):
                 print("[bootstrap] Timeout waiting for handshake.")
     
     print("\nQuerying network for available rooms...")
@@ -304,9 +304,14 @@ def main():
                 member_count = len(members.get(r, set()))
             print(f"  {idx}. {r} ({member_count} members)")
     else:
-        print("No rooms found. You can create a new one!")
-    
+        print("No rooms found. Create one!")
+        
     room = input("\nEnter room name: ").strip() or "lobby"
+    answer = input(f"Is this the room you want to join? Check spellling. (y/n): ")
+    while answer.lower()== 'n' or answer.lower() == 'no': 
+        room = input("\nEnter room name: ").strip() or "lobby"
+        answer = input(f"{room} Is this the room you want to join? Check spellling. (y/n): ")
+
 
     # Fixed ISSUE
     # if a completely new user joins, they won't see the members that joined before them.

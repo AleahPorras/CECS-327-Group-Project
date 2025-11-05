@@ -44,7 +44,7 @@ def network(port):
     if peer_found.is_set():
         return
     try:
-        s = socket.create_connection((MY_HOST, port), timeout = 5)
+        s = socket.create_connection((MY_HOST, port), timeout = 0.5)
         s.close()
 
         peer_found.set()

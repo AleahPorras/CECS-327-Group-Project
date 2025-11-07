@@ -1,10 +1,9 @@
 import socket, threading, json, sys, uuid, random, time
 
-
 # network configuration
 MY_HOST = "127.0.0.1"
 BASE_PORT = 5000
-MAX_PEERS = 100
+MAX_PEERS = 100 # can be changed in the future
 MY_PORT = None
 
 # peer state
@@ -12,7 +11,7 @@ neighbors = set()
 neighbors_lock = threading.Lock()
 seen = set()
 seen_lock = threading.Lock()
-username = None
+username = None # stores peer's username
 room = None
 members = {}
 members_lock = threading.Lock()
@@ -40,6 +39,7 @@ def send_msg(addr, obj):
     except OSError:
         pass
 
+# connects peers to already existing peers
 def network(port):
     if peer_found.is_set():
         return
@@ -89,8 +89,6 @@ def bootstrap():
         t.start()
         threads.append(t)
         
-    # for t in threads:
-    #     t.join()
     peer_found.wait(timeout = 5)
 
     if not peer_found.is_set():
@@ -148,7 +146,7 @@ def handle_msg(msg, tcp_addr):
                     "msg_id": new_id(),
                     "addr": [MY_HOST, MY_PORT],
                     "members": members_json, # returns the entire dictionary
-                 })
+                })
                 
         with rooms_lock:
             if all_rooms:

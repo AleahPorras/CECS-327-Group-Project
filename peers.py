@@ -12,7 +12,8 @@ neighbors_lock = threading.Lock()
 seen = set()
 seen_lock = threading.Lock()
 username = None # stores peer's username
-room = None
+current_chatroom = None
+current_chatrooms = set()
 members = {}
 members_lock = threading.Lock()
 
@@ -24,7 +25,7 @@ ready = threading.Event()
 handshake_done = threading.Event() # makes sure both the ping and pong are sent and recieved from bootstrap
 peer_found = threading.Event() # used to signal that a peer has been found
 
-#each peer keeps a "seen" of message IDs, so peers can tell duplicates when flooding
+# each peer keeps a "seen" of message IDs, so peers can tell duplicates when flooding
 def new_id():
     return str(uuid.uuid4())
 
@@ -53,7 +54,7 @@ def network(port):
                     "type": "ping",
                     "msg_id": new_id(),
                     "addr": [MY_HOST, MY_PORT],
-                    "room": room,
+                    "room": current_chatroom,
                     "ttl": 5,   # the message can be forwarded at most 5 hops.
         }
         send_msg((MY_HOST, port), msg)
@@ -129,18 +130,18 @@ def handle_msg(msg, tcp_addr):
 
     if mtype == "ping":
         # only reply to pings for my room
-        if room is not None and msg_room is not None and msg_room != room:
+        if current_chatroom is not None and msg_room is not None and msg_room != current_chatroom:
             return
         send_msg(real_addr, {
             "type": "pong",
             "msg_id": new_id(),
             "addr": [MY_HOST, MY_PORT],
-            "room": room,
+            "room": current_chatroom,
         })
         # focuses on sending current members to all new peers
         with members_lock:
             if members: # runs if there are other members available
-                members_json = {room: list(users) for room, users in members.items()} # keeps track of all the current members
+                members_json = {current_chatroom: list(users) for current_chatroom, users in members.items()} # keeps track of all the current members
                 send_msg(real_addr, {
                     "type": "member_sync",
                     "msg_id": new_id(),
@@ -163,7 +164,7 @@ def handle_msg(msg, tcp_addr):
     ## Handler functions
     if mtype == "pong":
         # only count handshake if same room
-        if room is None or msg_room is None or msg_room == room:
+        if current_chatroom is None or msg_room is None or msg_room == current_chatroom:
             print(f"\r[handshake] connection established with {real_addr}\n> ", end = "", flush = True)
             handshake_done.set()
         return
@@ -200,7 +201,7 @@ def handle_msg(msg, tcp_addr):
 
     # if msg_room is not None and room is not None and msg_room != room:
     #     return
-    if msg_room is not None and msg_room != room:
+    if msg_room is not None and msg_room != current_chatroom:
         forward(msg, exclude = real_addr)
         return
 
@@ -223,14 +224,14 @@ def handle_msg(msg, tcp_addr):
             all_rooms.add(msg_room)
 
     if mtype == "chat":
-        print(f"\r[{msg_user}@{msg_room}] {msg['text']}\n> ", end = "", flush = True)
+        print(f"\r[{msg_room}] {msg_user}: {msg['text']}\n[{current_chatroom}]> ", end = "", flush = True)
         # return
 
     if mtype == "leave":
         with members_lock:
             if msg_room in members:
                 members[msg_room].discard(msg_user)
-        if room == msg_room:
+        if current_chatroom == msg_room:
             print(f"\r{msg_user} left {msg_room}\n> ", end = "", flush = True)
             return
     if mtype not in ("ping", "pong", "room_response", "room_query", "member_synnc"):
@@ -282,8 +283,67 @@ def query_rooms():
     with rooms_lock:
         return list(all_rooms)
 
+# "Join {room name}"
+# "Switch {chatroom_name}"
+# "Rooms"
+
+# Commands that allow a user to manage which rooms they are currently in
+def commands(input):
+    # looks out for "Join" command
+    if input.startswith("Join "):
+        chatroom_name = input[5:].strip()
+        join_chatroom(chatroom_name)
+        return True
+    
+    elif input.startswith("Switch "):
+        chatroom_name = input[7:].strip()
+        if chatroom_name in current_chatrooms:
+            global current_chatroom
+            current_chatroom = chatroom_name
+            print(f"Switched to chatroom: {chatroom_name}")
+        else:
+            print(f"You are not a member of {chatroom_name}.")
+        return True
+
+    elif input == "Rooms":
+        print("Your active chatrooms:")
+        for chatroom in current_chatrooms:
+            num_of_members = len(members.get(chatroom,set()))
+            print(f"    - {chatroom} : ({num_of_members} members){'  (active)' if chatroom == current_chatroom else ''}")
+        return True
+    
+    return False
+
+def join_chatroom(new_chatroom):
+    global current_chatroom
+
+    with members_lock:
+        members.setdefault(new_chatroom, set())
+        if username in members[new_chatroom]:
+            print(f"Currently a member of {new_chatroom}.")
+            return
+        
+        members[new_chatroom].add(username)
+        current_chatrooms.add(new_chatroom)
+        current_chatroom = new_chatroom
+
+    with rooms_lock:
+        all_rooms.add(new_chatroom)
+
+    join_msg = {
+        "type": "join",
+        "msg_id": new_id(),
+        "user": username,
+        "room": new_chatroom,
+        "addr": [MY_HOST, MY_PORT],
+        "ttl": 5,
+    }
+    forward(join_msg)
+    print(f"Joined room: {new_chatroom}")
+
+
 def main():
-    global username, room
+    global username, current_chatroom
 
     threading.Thread(target=listener, daemon=True).start()
     ready.wait()
@@ -311,92 +371,137 @@ def main():
                 print("[bootstrap] No peers found, trying again.")
                 time.sleep(5)
     
-    print("\nQuerying network for available rooms...")
-    available_rooms = query_rooms()
-    
-    if available_rooms:
-        print("\nAvailable rooms:")
-        for idx, r in enumerate(available_rooms, 1):
-            with members_lock:
-                member_count = len(members.get(r, set()))
-            print(f"  {idx}. {r} ({member_count} members)")
-    else:
-        print("No rooms found. Create one!")
-        
-    room = input("\nEnter room name: ").strip() or "lobby"
-    answer = input(f"Is this the room you want to join? Check spellling. (y/n): ")
-    while answer.lower()== 'n' or answer.lower() == 'no': 
-        room = input("\nEnter room name: ").strip() or "lobby"
-        answer = input(f"Is this the room you want to join? Check spellling. (y/n): ")
+    initial_chatroom = input("\nEnter chatroom name: ").strip() or "lobby"
+    join_chatroom(initial_chatroom)
 
-    # Fixed ISSUE
-    # if a completely new user joins, they won't see the members that joined before them.
-    with members_lock:
-        members.setdefault(room, set())
-        while username in members[room]:
-            username = input("[ACTION NEEDED] User already has this name, enter a new one: ")
-
-        members[room].add(username)
-
-        print(f"[debug] neighbors now: {members}")
-
-    with rooms_lock:
-        all_rooms.add(room)
-
-    join_msg = {
-        "type": "join",
-        "msg_id": new_id(),
-        "user": username,
-        "room": room,
-        "addr": [MY_HOST, MY_PORT],
-        "ttl": 5,
-    }
-    forward(join_msg)
-
-    room_announce = {
-        "type": "room_announce",
-        "msg_id": new_id(),
-        "addr": [MY_HOST, MY_PORT],
-        "rooms": [room],
-        "ttl": 3,
-    }
-    forward(room_announce)
+    print("\nAvailable commands:")
+    print("     Join <chatroom>   - Joins a new chatroom")
+    print("     Switch <chatroom> - Switches to a different chatroom")
+    print("     Rooms             - Lists your current chatrooms\n")
 
     while True:
         try:
-            text = input("> ").strip()
+            text = input(f"[{current_chatroom}]> ").strip()
             if not text:
                 continue
 
-            if text.lower() in ("exit", "quit"):# or KeyboardInterrupt:
-                leave_msg = {
-                    "type": "leave",
-                    "msg_id": new_id(),
-                    "user": username,
-                    "room": room,
-                    "addr": [MY_HOST, MY_PORT],
-                    "ttl": 5,
-                }
-                forward(leave_msg)
+            if text.lower() in ("exit", "quit"):
+                # Send leave messages for all rooms
+                for room in current_chatrooms:
+                    leave_msg = {
+                        "type": "leave",
+                        "msg_id": new_id(),
+                        "user": username,
+                        "room": room,
+                        "addr": [MY_HOST, MY_PORT],
+                        "ttl": 5,
+                    }
+                    forward(leave_msg)
                 print("exiting...")
                 break
 
+            # Handle room management commands
+            if commands(text):
+                continue
+
+            # Send chat message to active room
             msg = {
                 "type": "chat",
                 "msg_id": new_id(),
                 "user": username,
-                "room": room,
+                "room": current_chatroom,
                 "text": text,
                 "addr": [MY_HOST, MY_PORT],
                 "ttl": 5,
             }
             forward(msg)
+
+    # print("\nQuerying network for available rooms...")
+    # available_rooms = query_rooms()
+    
+    # if available_rooms:
+    #     print("\nAvailable rooms:")
+    #     for idx, r in enumerate(available_rooms, 1):
+    #         with members_lock:
+    #             member_count = len(members.get(r, set()))
+    #         print(f"  {idx}. {r} ({member_count} members)")
+    # else:
+    #     print("No rooms found. Create one!")
+        
+    # room = input("\nEnter room name: ").strip() or "lobby"
+    # answer = input(f"Is this the room you want to join? Check spellling. (y/n): ")
+    # while answer.lower()== 'n' or answer.lower() == 'no': 
+    #     room = input("\nEnter room name: ").strip() or "lobby"
+    #     answer = input(f"Is this the room you want to join? Check spellling. (y/n): ")
+
+    # # Fixed ISSUE
+    # # if a completely new user joins, they won't see the members that joined before them.
+    # with members_lock:
+    #     members.setdefault(room, set())
+    #     while username in members[room]:
+    #         username = input("[ACTION NEEDED] User already has this name, enter a new one: ")
+
+    #     members[room].add(username)
+
+    #     print(f"[debug] neighbors now: {members}")
+
+    # with rooms_lock:
+    #     all_rooms.add(room)
+
+    # join_msg = {
+    #     "type": "join",
+    #     "msg_id": new_id(),
+    #     "user": username,
+    #     "room": room,
+    #     "addr": [MY_HOST, MY_PORT],
+    #     "ttl": 5,
+    # }
+    # forward(join_msg)
+
+    # room_announce = {
+    #     "type": "room_announce",
+    #     "msg_id": new_id(),
+    #     "addr": [MY_HOST, MY_PORT],
+    #     "rooms": [room],
+    #     "ttl": 3,
+    # }
+    # forward(room_announce)
+
+    # while True:
+    #     try:
+    #         text = input("> ").strip()
+    #         if not text:
+    #             continue
+
+    #         if text.lower() in ("exit", "quit"):# or KeyboardInterrupt:
+    #             leave_msg = {
+    #                 "type": "leave",
+    #                 "msg_id": new_id(),
+    #                 "user": username,
+    #                 "room": room,
+    #                 "addr": [MY_HOST, MY_PORT],
+    #                 "ttl": 5,
+    #             }
+    #             forward(leave_msg)
+    #             print("exiting...")
+    #             break
+
+    #         msg = {
+    #             "type": "chat",
+    #             "msg_id": new_id(),
+    #             "user": username,
+    #             "room": room,
+    #             "text": text,
+    #             "addr": [MY_HOST, MY_PORT],
+    #             "ttl": 5,
+    #         }
+    #         forward(msg)
         except KeyboardInterrupt:
             leave_msg = {
                 "type": "leave",
                 "msg_id": new_id(),
                 "user": username,
-                "room": room,
+                "room": current_chatroom,
                 "addr": [MY_HOST, MY_PORT],
                 "ttl": 5,
             }

@@ -17,6 +17,8 @@ current_chatrooms = set()
 members = {}
 members_lock = threading.Lock()
 subscriptions = set() # for fooding
+console_lock = threading.Lock()
+
 
 # room management
 all_rooms = set()
@@ -209,10 +211,12 @@ def handle_msg(msg, tcp_addr):
 
     # if msg_room is not None and room is not None and msg_room != room:
     #     return
+    # Only skip messages meant for other rooms — but let discoverRoom & discoverTopic pass through
     if msg_room is not None and msg_room != current_chatroom:
         if mtype not in ("discoverRoom", "discoverTopic"):
             forward(msg, exclude=real_addr)
             return
+
 
     if mtype == "join":
         with members_lock:
@@ -259,12 +263,10 @@ def handle_msg(msg, tcp_addr):
         with members_lock:
             for r, user_set in members.items():
                 if room_name == " ".join(r.lower().split()):
-                    print(f"\r[{room_name()} ANNOUNCEMENT] {msg_user}: {msg['text']}\n[{current_chatroom}]> ", end="", flush=True)
+                    print(f"\r[{room_name} ANNOUNCEMENT] {msg_user}: {msg['text']}\n[{current_chatroom}]> ", end="", flush=True)
                     break
         forward(msg, exclude=real_addr)
         return
-
-
 
     if mtype not in ("ping", "pong", "room_response", "room_query", "member_synnc"):
         forward(msg, exclude=real_addr)
@@ -396,8 +398,9 @@ def commands(user_input):
         print("     d/Flood <message>         - Sends a message to everyone and every room")
         print("     d/discoverTopic <topic>   - Input topic you want to send message to, then will input a message to send")
         print("     d/discoverRoom <room>     - Input room you want to send message to, then will input a message to send")
-        print("     d/--help                  - Reprint comands\n")
+        print("     d/help                  - Reprint comands\n")
         # forward(msg, exclude=real_addr)
+        return True
         
 
     return False

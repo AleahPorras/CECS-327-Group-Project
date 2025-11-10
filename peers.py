@@ -210,8 +210,9 @@ def handle_msg(msg, tcp_addr):
     # if msg_room is not None and room is not None and msg_room != room:
     #     return
     if msg_room is not None and msg_room != current_chatroom:
-        forward(msg, exclude = real_addr)
-        return
+        if mtype not in ("discoverRoom", "discoverTopic"):
+            forward(msg, exclude=real_addr)
+            return
 
     if mtype == "join":
         with members_lock:
@@ -242,8 +243,35 @@ def handle_msg(msg, tcp_addr):
         if current_chatroom == msg_room:
             print(f"\r{msg_user} left {msg_room}\n> ", end = "", flush = True)
             return
+        
+    if mtype == "discoverTopic": 
+        topic_name = msg.get("topic", "")
+        for chatroom in current_chatrooms:
+            if topic_name in " ".join(chatroom.lower().split()):
+                print(f"\r[{topic_name} ANNONCEMENT] {msg_user}: {msg['text']}\n[{current_chatroom}]> ", end = "", flush = True)
+                break
+        forward(msg, exclude=real_addr)
+        return
+
+    if mtype == "discoverRoom": 
+        room_name = msg.get("room", "")
+        # Check if this peer is actually a member of that room
+        with members_lock:
+            for r, user_set in members.items():
+                if room_name == " ".join(r.lower().split()):
+                    print(f"\r[{room_name()} ANNOUNCEMENT] {msg_user}: {msg['text']}\n[{current_chatroom}]> ", end="", flush=True)
+                    break
+        forward(msg, exclude=real_addr)
+        return
+
+
+
     if mtype not in ("ping", "pong", "room_response", "room_query", "member_synnc"):
         forward(msg, exclude=real_addr)
+    
+    
+
+    
 
 # read one TCP and feed all messages on it into handle_msg function
 def handle_conn(conn, addr):
@@ -296,15 +324,15 @@ def query_rooms():
 # "Rooms"
 
 # Commands that allow a user to manage which rooms they are currently in
-def commands(input):
+def commands(user_input):
     # looks out for "Join" command
-    if input.startswith("Join "):
-        chatroom_name = input[5:].strip()
+    if user_input.startswith("d/Join "):
+        chatroom_name = user_input[len("d/Join "):].strip()
         join_chatroom(chatroom_name)
         return True
     
-    elif input.startswith("Switch "):
-        chatroom_name = input[7:].strip()
+    elif user_input.startswith("d/Switch "):
+        chatroom_name =  user_input[len("d/Switch "):].strip()
         if chatroom_name in current_chatrooms:
             global current_chatroom
             current_chatroom = chatroom_name
@@ -313,7 +341,7 @@ def commands(input):
             print(f"You are not a member of {chatroom_name}.")
         return True
 
-    elif input == "Rooms":
+    elif user_input == "d/Rooms":
         print("Your active chatrooms:")
         for chatroom in current_chatrooms:
             num_of_members = len(members.get(chatroom,set()))
@@ -321,14 +349,56 @@ def commands(input):
         return True
 
     # FLOOD all peers
-    if input.startswith("Flood "):
-        txt = input[len("Flood "):].strip()
+    elif user_input.startswith("d/Flood "):
+        txt = user_input[len("d/Flood "):].strip()
         if not txt:
             print("Usage: Flood <message>")
             return True
         send_flood(txt)
         print("Global flood sent")
         return True
+
+    elif user_input.startswith("d/discoverTopic "):
+        topic = " ".join(user_input[len("d/discoverTopic "):].lower().split())
+        txt = input("Enter your message: ")
+        msg = {
+                "type": "discoverTopic",
+                "topic": topic,  # The topic to search for
+                "msg_id": new_id(),
+                "user": username,
+                "text": txt,          # The message to send
+                "addr": [MY_HOST, MY_PORT],
+                "ttl": 5,
+            }
+        forward(msg)
+        return True
+    
+    elif user_input.startswith("d/discoverRoom "):
+        room = " ".join(user_input[len("d/discoverRoom "):].lower().split())
+        txt = input("Enter your message: ")
+        msg = {
+                "type": "discoverRoom",
+                "room": room,  # The topic to search for
+                "msg_id": new_id(),
+                "user": username,
+                "text": txt,          # The message to send
+                "addr": [MY_HOST, MY_PORT],
+                "ttl": 5,
+            }
+        forward(msg)
+        return True
+    
+    elif user_input.startswith("d/help"): 
+        print("\nAvailable commands:")
+        print("     d/Join <chatroom>         - Joins a new chatroom")
+        print("     d/Switch <chatroom>       - Switches to a different chatroom")
+        print("     d/Rooms                   - Lists your current chatrooms\n")
+        print("     d/Flood <message>         - Sends a message to everyone and every room")
+        print("     d/discoverTopic <topic>   - Input topic you want to send message to, then will input a message to send")
+        print("     d/discoverRoom <room>     - Input room you want to send message to, then will input a message to send")
+        print("     d/--help                  - Reprint comands\n")
+        # forward(msg, exclude=real_addr)
+        
 
     return False
 
@@ -404,9 +474,13 @@ def main():
     join_chatroom(initial_chatroom)
 
     print("\nAvailable commands:")
-    print("     Join <chatroom>   - Joins a new chatroom")
-    print("     Switch <chatroom> - Switches to a different chatroom")
-    print("     Rooms             - Lists your current chatrooms\n")
+    print("     d/Join <chatroom>         - Joins a new chatroom")
+    print("     d/Switch <chatroom>       - Switches to a different chatroom")
+    print("     d/Rooms                   - Lists your current chatrooms")
+    print("     d/Flood <message>         - Sends a message to everyone and every room")
+    print("     d/discoverTopic <topic>   - Input topic you want to send message to, then will input a message to send")
+    print("     d/discoverRoom <room>     - Input room you want to send message to, then will input a message to send")
+    print("     d/help                    - Reprint comands")
 
     while True:
         try:

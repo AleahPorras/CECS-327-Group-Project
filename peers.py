@@ -16,6 +16,7 @@ current_chatroom = None
 current_chatrooms = set()
 members = {}
 members_lock = threading.Lock()
+subscriptions = set() # for fooding
 
 # room management
 all_rooms = set()
@@ -199,6 +200,13 @@ def handle_msg(msg, tcp_addr):
             all_rooms.update(rooms)
         return
 
+    if mtype == "flood":
+        src = msg.get("user", "?")
+        text = msg.get("text", "")
+        print(f"\r[FLOOD] {src}: {text}\n[{current_chatroom}]> ", end="", flush=True)
+        forward(msg, exclude=real_addr)
+        return
+
     # if msg_room is not None and room is not None and msg_room != room:
     #     return
     if msg_room is not None and msg_room != current_chatroom:
@@ -311,7 +319,17 @@ def commands(input):
             num_of_members = len(members.get(chatroom,set()))
             print(f"    - {chatroom} : ({num_of_members} members){'  (active)' if chatroom == current_chatroom else ''}")
         return True
-    
+
+    # FLOOD all peers
+    if input.startswith("Flood "):
+        txt = input[len("Flood "):].strip()
+        if not txt:
+            print("Usage: Flood <message>")
+            return True
+        send_flood(txt)
+        print("Global flood sent")
+        return True
+
     return False
 
 def join_chatroom(new_chatroom):
@@ -341,6 +359,17 @@ def join_chatroom(new_chatroom):
     forward(join_msg)
     print(f"Joined room: {new_chatroom}")
 
+def send_flood(text):
+    msg ={
+        "type": "flood",
+        "msg_id": new_id(),
+        "user": username,
+        "text": text,
+        "addr": [MY_HOST, MY_PORT],
+        "ttl": 5,
+    }
+    forward(msg)
+    print("send global flood")
 
 def main():
     global username, current_chatroom

@@ -217,6 +217,16 @@ def handle_msg(msg, tcp_addr):
             forward(msg, exclude=real_addr)
             return
 
+    # switching room message for other rooms to notify users
+    if mtype =="focus_enter":
+        print(f'\r[{msg_room}] {msg_user} is now active here.\n[{current_chatroom}]> ', end='', flush=True)
+        forward(msg, exclude=real_addr)
+        return
+    
+    if mtype == "focus_leave":
+        print(f'\r[{msg_room}] {msg_user} switched away.\n[{current_chatroom}]> ', end='', flush=True)
+        forward(msg, exclude=real_addr)
+        return
 
     if mtype == "join":
         with members_lock:
@@ -338,16 +348,33 @@ def commands(user_input):
         if chatroom_name in current_chatrooms:
             global current_chatroom
             current_chatroom = chatroom_name
+
+            # announce leaving focus in old room
+            if old_room and old_room != chatroom_name:
+                forward({
+                    "type": "focus_leave",
+                    "msg_id": new_id(),
+                    "user": username,
+                    "room": old_room,
+                    "addr": [MY_HOST, MY_PORT],
+                    "ttl": 5,
+                })
+
+            # switch locally
+            current_chatroom = chatroom_name
             print(f"Switched to chatroom: {chatroom_name}")
+
+            # announce entering focus in new room
+            forward({
+                "type": "focus_enter",
+                "msg_id": new_id(),
+                "user": username,
+                "room": chatroom_name,
+                "addr": [MY_HOST, MY_PORT],
+                "ttl": 5,
+            })
         else:
             print(f"You are not a member of {chatroom_name}.")
-        return True
-
-    elif user_input == "d/Rooms":
-        print("Your active chatrooms:")
-        for chatroom in current_chatrooms:
-            num_of_members = len(members.get(chatroom,set()))
-            print(f"    - {chatroom} : ({num_of_members} members){'  (active)' if chatroom == current_chatroom else ''}")
         return True
 
     # FLOOD all peers
@@ -430,7 +457,14 @@ def join_chatroom(new_chatroom):
         "ttl": 5,
     }
     forward(join_msg)
-    print(f"Joined room: {new_chatroom}")
+    forward({
+    "type": "focus_enter",
+    "msg_id": new_id(),
+    "user": username,
+    "room": new_chatroom,
+    "addr": [MY_HOST, MY_PORT],
+    "ttl": 5,
+})
 
 def send_flood(text):
     msg ={

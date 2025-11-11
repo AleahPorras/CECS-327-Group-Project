@@ -349,6 +349,9 @@ def commands(user_input):
             global current_chatroom
             current_chatroom = chatroom_name
 
+            # save the room we're in before we switch
+            old_room = current_chatroom
+
             # announce leaving focus in old room
             if old_room and old_room != chatroom_name:
                 forward({

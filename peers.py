@@ -224,9 +224,10 @@ def handle_msg(msg, tcp_addr):
         return
     
     if mtype == "focus_leave":
-        print(f'\r[{msg_room}] {msg_user} switched away.\n[{current_chatroom}]> ', end='', flush=True)
+        print(f"\r[{msg_room}] {msg_user} has left the chat.\n[{current_chatroom}]> ", end="", flush=True)
         forward(msg, exclude=real_addr)
         return
+
 
     if mtype == "join":
         with members_lock:
@@ -278,8 +279,9 @@ def handle_msg(msg, tcp_addr):
         forward(msg, exclude=real_addr)
         return
 
-    if mtype not in ("ping", "pong", "room_response", "room_query", "member_synnc"):
+    if mtype not in ("ping", "pong", "room_response", "room_query", "member_sync"):
         forward(msg, exclude=real_addr)
+
     
     
 
@@ -344,15 +346,14 @@ def commands(user_input):
         return True
     
     elif user_input.startswith("d/Switch "):
-        chatroom_name =  user_input[len("d/Switch "):].strip()
+        chatroom_name = user_input[len("d/Switch "):].strip()
+        global current_chatroom
+
+        # capture old room before changing anything
+        old_room = current_chatroom
+
         if chatroom_name in current_chatrooms:
-            global current_chatroom
-            current_chatroom = chatroom_name
-
-            # save the room we're in before we switch
-            old_room = current_chatroom
-
-            # announce leaving focus in old room
+            # announce leaving focus in old room (if any and different)
             if old_room and old_room != chatroom_name:
                 forward({
                     "type": "focus_leave",
@@ -363,7 +364,7 @@ def commands(user_input):
                     "ttl": 5,
                 })
 
-            # switch locally
+            # now switch locally
             current_chatroom = chatroom_name
             print(f"Switched to chatroom: {chatroom_name}")
 
@@ -380,7 +381,7 @@ def commands(user_input):
             print(f"You are not a member of {chatroom_name}.")
         return True
 
-    # FLOOD all peers
+        # FLOOD all peers
     elif user_input.startswith("d/Flood "):
         txt = user_input[len("d/Flood "):].strip()
         if not txt:
@@ -388,7 +389,14 @@ def commands(user_input):
             return True
         send_flood(txt)
         print("Global flood sent")
+    elif user_input == "d/Rooms":
+        print("Your active chatrooms:")
+        for chatroom in current_chatrooms:
+            num = len(members.get(chatroom, set()))
+            print(f"    - {chatroom} : ({num} members){'  (active)' if chatroom == current_chatroom else ''}")
         return True
+
+
 
     elif user_input.startswith("d/discoverTopic "):
         topic = " ".join(user_input[len("d/discoverTopic "):].lower().split())

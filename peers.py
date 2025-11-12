@@ -18,6 +18,7 @@ members = {}
 members_lock = threading.Lock()
 subscriptions = set() # for fooding
 console_lock = threading.Lock()
+room_state_lock = threading.Lock() # <<< LOCK ADDED
 
 
 # room management
@@ -25,10 +26,10 @@ all_rooms = set()
 rooms_lock = threading.Lock()
 
 ready = threading.Event()
-handshake_done = threading.Event() # makes sure both the ping and pong are sent and recieved from bootstrap
-peer_found = threading.Event() # used to signal that a peer has been found
+handshake_done = threading.Event() 
+peer_found = threading.Event() 
 
-# each peer keeps a "seen" of message IDs, so peers can tell duplicates when flooding
+# each peer keeps a "seen" of message IDs
 def new_id():
     return str(uuid.uuid4())
 
@@ -52,30 +53,38 @@ def network(port):
         s.close()
 
         peer_found.set()
+        
+        
+        with room_state_lock:
+            local_room = current_chatroom
 
         msg = {
                     "type": "ping",
                     "msg_id": new_id(),
                     "addr": [MY_HOST, MY_PORT],
-                    "room": current_chatroom,
-                    "ttl": 5,   # the message can be forwarded at most 5 hops.
+                    "room": local_room, # Use locked value
+                    "ttl": 5,
         }
         send_msg((MY_HOST, port), msg)
-        print(f"[bootstrap] connected to existing peer at {MY_HOST}:{port}")
+        
+        
+        with console_lock:
+            print(f"[bootstrap] connected to existing peer at {MY_HOST}:{port}")
 
     except (OSError, TimeoutError):
         pass
     except Exception as e:
-        print(f"[network] unexpected error: {e}")
+        
+        with console_lock:
+            print(f"[network] unexpected error: {e}")
         pass
 
 # first contact of a new peer to the network
-# sends a ping to known peer, and that peer answer with pong and both added to their neighbors
-# look for a running peer , if none is found, it is the first peer
 def bootstrap():
-
     if MY_PORT == BASE_PORT:
-        print("[bootstrap] I am the first peer, starting new network")
+        
+        with console_lock:
+            print("[bootstrap] I am the first peer, starting new network")
         return
 
     if MY_PORT is None:
@@ -93,10 +102,12 @@ def bootstrap():
         t.start()
         threads.append(t)
         
-    peer_found.wait(timeout = 5)
-
-    if not peer_found.is_set():
-        print("[bootstrap] no existing peers found; starting a new network.")
+    # --- CONNECTION FIX ---
+    # Wait for all threads to finish, don't use a racy 5-second timeout
+    for t in threads:
+        t.join() 
+    
+    # The check for peer_found is now handled reliably in the main() loop
 
 # flood a message to all neighbors except the one you know
 def forward(msg, exclude =None):
@@ -112,7 +123,15 @@ def forward(msg, exclude =None):
             continue
         send_msg(n, msg)
 
+#
+# --- THIS IS THE FULLY FIXED handle_msg FUNCTION ---
+#
 def handle_msg(msg, tcp_addr):
+    # --- LOCKS ADDED (Snapshot Pattern) ---
+    with room_state_lock:
+        local_current_room = current_chatroom
+        local_current_rooms = set(current_chatrooms) # make a copy
+    
     global neighbors, members
 
     real_addr = tuple(msg.get("addr", tcp_addr))
@@ -132,24 +151,24 @@ def handle_msg(msg, tcp_addr):
     msg_user = msg.get("user")
 
     if mtype == "ping":
-        # only reply to pings for my room
-        if current_chatroom is not None and msg_room is not None and msg_room != current_chatroom:
+        # Ping/Pong does not get forwarded, it's a direct conversation.
+        if local_current_room is not None and msg_room is not None and msg_room != local_current_room:
             return
         send_msg(real_addr, {
             "type": "pong",
             "msg_id": new_id(),
             "addr": [MY_HOST, MY_PORT],
-            "room": current_chatroom,
+            "room": local_current_room,
         })
-        # focuses on sending current members to all new peers
+        # Send member sync on ping
         with members_lock:
-            if members: # runs if there are other members available
-                members_json = {current_chatroom: list(users) for current_chatroom, users in members.items()} # keeps track of all the current members
+            if members: 
+                members_json = {r: list(users) for r, users in members.items()}
                 send_msg(real_addr, {
                     "type": "member_sync",
                     "msg_id": new_id(),
                     "addr": [MY_HOST, MY_PORT],
-                    "members": members_json, # returns the entire dictionary
+                    "members": members_json,
                 })
                 
         with rooms_lock:
@@ -161,31 +180,28 @@ def handle_msg(msg, tcp_addr):
                     "rooms": list(all_rooms),
                     "ttl": 3,
                 })
+        # We forward the *original* ping to propagate it
         forward(msg, exclude=real_addr)
         return
 
     ## Handler functions
     if mtype == "pong":
-        # only count handshake if same room
-        if current_chatroom is None or msg_room is None or msg_room == current_chatroom:
-            print(f"\r[handshake] connection established with {real_addr}\n> ", end = "", flush = True)
+        # Pong is also a direct reply, no forward.
+        if local_current_room is None or msg_room is None or msg_room == local_current_room:
+            
+            with console_lock:
+                print(f"\r[handshake] connection established with {real_addr}\n> ", end = "", flush = True)
             handshake_done.set()
         return
     
+    # These types are also not forwarded
     if mtype == "member_sync":
-        synced_members = msg.get("members",{}) # gets member from each peer
+        synced_members = msg.get("members",{})
         with members_lock:
             for r, user_set in synced_members.items():
-                members.setdefault(r, set()).update(user_set) # merges the current member dictionary with the peer's
+                members.setdefault(r, set()).update(user_set)
         return
 
-    if mtype == "room_announce":
-        announced_rooms = msg.get("rooms", [])
-        with rooms_lock:
-            for r in announced_rooms:
-                all_rooms.add(r)
-        return
-    
     if mtype == "room_query":
         with rooms_lock:
             send_msg(real_addr, {
@@ -202,90 +218,96 @@ def handle_msg(msg, tcp_addr):
             all_rooms.update(rooms)
         return
 
+    # --- "FORWARD FIRST" PATTERN (THE CRITICAL SYNC FIX) ---
+    # We forward *everything* else *before* processing it locally
+    forward(msg, exclude=real_addr)
+
+    if mtype == "room_announce":
+        announced_rooms = msg.get("rooms", [])
+        with rooms_lock:
+            for r in announced_rooms:
+                all_rooms.add(r)
+        return
+    
     if mtype == "flood":
         src = msg.get("user", "?")
         text = msg.get("text", "")
-        print(f"\r[FLOOD] {src}: {text}\n[{current_chatroom}]> ", end="", flush=True)
-        forward(msg, exclude=real_addr)
+        
+        with console_lock:
+            print(f"\r[FLOOD] {src}: {text}\n[{local_current_room}]> ", end="", flush=True)
         return
-
-    # if msg_room is not None and room is not None and msg_room != room:
-    #     return
-    # Only skip messages meant for other rooms — but let discoverRoom & discoverTopic pass through
-    if msg_room is not None and msg_room != current_chatroom:
-        if mtype not in ("discoverRoom", "discoverTopic"):
-            forward(msg, exclude=real_addr)
-            return
-
-    # switching room message for other rooms to notify users
-    if mtype =="focus_enter":
-        print(f'\r[{msg_room}] {msg_user} is now active here.\n[{current_chatroom}]> ', end='', flush=True)
-        forward(msg, exclude=real_addr)
-        return
-    
-    if mtype == "focus_leave":
-        print(f"\r[{msg_room}] {msg_user} has left the chat.\n[{current_chatroom}]> ", end="", flush=True)
-        forward(msg, exclude=real_addr)
-        return
-
 
     if mtype == "join":
         with members_lock:
             members.setdefault(msg_room, set())
             if msg_user in members[msg_room]:
-                send_msg(real_addr, {
-                    "type": "name_taken",
-                    "msg_id": new_id(),
-                    "room": msg_room,
-                    "user": msg_user,
-                })
-                return
-
+                # We already know, but we must *not* send name_taken
+                # because this message might be for another peer.
+                # Just exit silently.
+                return 
             members[msg_room].add(msg_user)
-            print(f"\r{msg_user} joined {msg_room}\n> ", end = "", flush = True)
+        
+        # --- "Noisy Join" FIX ---
+        if msg_room == local_current_room:
             
+            with console_lock:
+                print(f"\r{msg_user} joined {msg_room}\n> ", end = "", flush = True)
+        
         with rooms_lock:
             all_rooms.add(msg_room)
-
-    if mtype == "chat":
-        print(f"\r[{msg_room}] {msg_user}: {msg['text']}\n[{current_chatroom}]> ", end = "", flush = True)
-        # return
+        return 
 
     if mtype == "leave":
+        user_was_in_room = False
         with members_lock:
-            if msg_room in members:
+            if msg_room in members and msg_user in members[msg_room]:
                 members[msg_room].discard(msg_user)
-        if current_chatroom == msg_room:
-            print(f"\r{msg_user} left {msg_room}\n> ", end = "", flush = True)
-            return
+                user_was_in_room = True
         
+        if user_was_in_room and local_current_room == msg_room:
+            
+            with console_lock:
+                print(f"\r{msg_user} left {msg_room}\n> ", end = "", flush = True)
+        return 
+
     if mtype == "discoverTopic": 
         topic_name = msg.get("topic", "")
-        for chatroom in current_chatrooms:
+        for chatroom in local_current_rooms:
             if topic_name in " ".join(chatroom.lower().split()):
-                print(f"\r[{topic_name} ANNONCEMENT] {msg_user}: {msg['text']}\n[{current_chatroom}]> ", end = "", flush = True)
+                
+                with console_lock:
+                    print(f"\r[{topic_name} ANNONCEMENT] {msg_user}: {msg['text']}\n[{local_current_room}]> ", end = "", flush = True)
                 break
-        forward(msg, exclude=real_addr)
         return
 
-    if mtype == "discoverRoom": 
-        room_name = msg.get("room", "")
-        # Check if this peer is actually a member of that room
-        with members_lock:
-            for r, user_set in members.items():
-                if room_name == " ".join(r.lower().split()):
-                    print(f"\r[{room_name} ANNOUNCEMENT] {msg_user}: {msg['text']}\n[{current_chatroom}]> ", end="", flush=True)
-                    break
-        forward(msg, exclude=real_addr)
+    if mtype =="focus_enter":
+        # --- "Noisy Join" FIX ---
+        if msg_room == local_current_room:
+            
+            with console_lock:
+                print(f'\r[{msg_room}] {msg_user} is now active here.\n[{local_current_room}]> ', end='', flush=True)
+        return
+    
+    if mtype == "focus_leave":
+        # --- "Noisy Join" FIX ---
+        if msg_room == local_current_room:
+            
+            with console_lock:
+                print(f"\r[{msg_room}] {msg_user} has left the chat.\n[{local_current_room}]> ", end="", flush=True)
         return
 
-    if mtype not in ("ping", "pong", "room_response", "room_query", "member_sync"):
-        forward(msg, exclude=real_addr)
-
+    # --- ROOM FILTER ---
+    if msg_room is not None and msg_room != local_current_room:
+        return # Not for our active room, and we've already forwarded it.
     
-    
-
-    
+    if mtype == "chat":
+        
+        with console_lock:
+            print(f"\r[{msg_room}] {msg_user}: {msg['text']}\n[{local_current_room}]> ", end = "", flush = True)
+        return
+#
+# --- END OF FIXED handle_msg ---
+#
 
 # read one TCP and feed all messages on it into handle_msg function
 def handle_conn(conn, addr):
@@ -301,7 +323,6 @@ def handle_conn(conn, addr):
 def listener():
     global MY_PORT
     s = socket.socket()
-    #s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR,
 
     # pick the first free port starting at BASE_PORT
     for port in range(BASE_PORT, BASE_PORT + MAX_PEERS):
@@ -313,7 +334,9 @@ def listener():
             continue
 
     s.listen(100)
-    print(f"[listen] {MY_HOST}:{MY_PORT}")
+    
+    with console_lock:
+        print(f"[listen] {MY_HOST}:{MY_PORT}")
     ready.set()
 
     while True:
@@ -332,29 +355,66 @@ def query_rooms():
     
     with rooms_lock:
         return list(all_rooms)
+    
+def room_checker(chatroom_name):
 
-# "Join {room name}"
-# "Switch {chatroom_name}"
-# "Rooms"
+    name = " ".join(chatroom_name.lower().split())
+
+    with rooms_lock:
+        existing_chatrooms = list(all_rooms)
+    
+    for room in existing_chatrooms:
+        if " ".join(room.lower().split()) == name:
+            return room
+        
+    return chatroom_name
+
+def username_check(username):
+    with members_lock:
+        all_users = set().union(*members.values())
+
+        if username in all_users:
+            return True
+    return False
 
 # Commands that allow a user to manage which rooms they are currently in
 def commands(user_input):
-    # looks out for "Join" command
     if user_input.startswith("d/Join "):
         chatroom_name = user_input[len("d/Join "):].strip()
-        join_chatroom(chatroom_name)
+        # join_chatroom(chatroom_name)
+        if not chatroom_name:
+            with console_lock:
+                print("Usage: d/Join <chatroom name>")
+            return True
+    
+        true_chatroom = room_checker(chatroom_name)
+        join_chatroom(true_chatroom)
         return True
     
     elif user_input.startswith("d/Switch "):
         chatroom_name = user_input[len("d/Switch "):].strip()
         global current_chatroom
+        
+        old_room = None
+        do_switch = False
+        
+        
+        with room_state_lock:
+            if chatroom_name not in current_chatrooms:
 
-        # capture old room before changing anything
-        old_room = current_chatroom
+                with console_lock:
+                    print(f"You are not a member of {chatroom_name}.")
+            elif current_chatroom == chatroom_name:
 
-        if chatroom_name in current_chatrooms:
-            # announce leaving focus in old room (if any and different)
-            if old_room and old_room != chatroom_name:
+                with console_lock:
+                    print(f"Already active in {chatroom_name}.")
+            else:
+                old_room = current_chatroom
+                current_chatroom = chatroom_name
+                do_switch = True
+        
+        if do_switch:
+            if old_room:
                 forward({
                     "type": "focus_leave",
                     "msg_id": new_id(),
@@ -363,12 +423,11 @@ def commands(user_input):
                     "addr": [MY_HOST, MY_PORT],
                     "ttl": 5,
                 })
+            
 
-            # now switch locally
-            current_chatroom = chatroom_name
-            print(f"Switched to chatroom: {chatroom_name}")
+            with console_lock:
+                print(f"Switched to chatroom: {chatroom_name}")
 
-            # announce entering focus in new room
             forward({
                 "type": "focus_enter",
                 "msg_id": new_id(),
@@ -377,36 +436,51 @@ def commands(user_input):
                 "addr": [MY_HOST, MY_PORT],
                 "ttl": 5,
             })
-        else:
-            print(f"You are not a member of {chatroom_name}.")
         return True
 
-        # FLOOD all peers
+
     elif user_input.startswith("d/Flood "):
         txt = user_input[len("d/Flood "):].strip()
         if not txt:
-            print("Usage: Flood <message>")
+
+            with console_lock:
+                print("Usage: Flood <message>")
             return True
         send_flood(txt)
-        print("Global flood sent")
-    elif user_input == "d/Rooms":
-        print("Your active chatrooms:")
-        for chatroom in current_chatrooms:
-            num = len(members.get(chatroom, set()))
-            print(f"    - {chatroom} : ({num} members){'  (active)' if chatroom == current_chatroom else ''}")
+
+        with console_lock:
+            print("Global flood sent")
         return True
 
+    elif user_input == "d/Rooms":
 
+        with room_state_lock:
+            local_chatrooms = list(current_chatrooms)
+            local_active_room = current_chatroom
+
+        room_counts = {}
+        with members_lock:
+            for chatroom in local_chatrooms:
+                room_counts[chatroom] = len(members.get(chatroom, set()))
+
+        with console_lock:
+            print("Your active chatrooms:")
+            for chatroom in local_chatrooms:
+                num = room_counts[chatroom]
+                print(f"    - {chatroom} : ({num} members){'  (active)' if chatroom == local_active_room else ''}")
+        return True
 
     elif user_input.startswith("d/discoverTopic "):
         topic = " ".join(user_input[len("d/discoverTopic "):].lower().split())
-        txt = input("Enter your message: ")
+
+        with console_lock:
+            txt = input("Enter your message: ")
         msg = {
                 "type": "discoverTopic",
-                "topic": topic,  # The topic to search for
+                "topic": topic,
                 "msg_id": new_id(),
                 "user": username,
-                "text": txt,          # The message to send
+                "text": txt,
                 "addr": [MY_HOST, MY_PORT],
                 "ttl": 5,
             }
@@ -415,13 +489,15 @@ def commands(user_input):
     
     elif user_input.startswith("d/discoverRoom "):
         room = " ".join(user_input[len("d/discoverRoom "):].lower().split())
-        txt = input("Enter your message: ")
+
+        with console_lock:
+            txt = input("Enter your message: ")
         msg = {
                 "type": "discoverRoom",
-                "room": room,  # The topic to search for
+                "room": room,
                 "msg_id": new_id(),
                 "user": username,
-                "text": txt,          # The message to send
+                "text": txt,
                 "addr": [MY_HOST, MY_PORT],
                 "ttl": 5,
             }
@@ -429,45 +505,53 @@ def commands(user_input):
         return True
     
     elif user_input.startswith("d/help"): 
-        print("\nAvailable commands:")
-        print("     d/Join <chatroom>         - Joins a new chatroom")
-        print("     d/Switch <chatroom>       - Switches to a different chatroom")
-        print("     d/Rooms                   - Lists your current chatrooms\n")
-        print("     d/Flood <message>         - Sends a message to everyone and every room")
-        print("     d/discoverTopic <topic>   - Input topic you want to send message to, then will input a message to send")
-        print("     d/discoverRoom <room>     - Input room you want to send message to, then will input a message to send")
-        print("     d/help                  - Reprint comands\n")
-        # forward(msg, exclude=real_addr)
+
+        with console_lock:
+            print("\nAvailable commands:")
+            print("     d/Join <chatroom>         - Joins a new chatroom")
+            print("     d/Switch <chatroom>       - Switches to a different chatroom")
+            print("     d/Rooms                   - Lists your current chatrooms")
+            print("     d/Flood <message>         - Sends a message to everyone and every room")
+            print("     d/discoverTopic <topic>   - Input topic you want to send message to, then will input a message to send")
+            print("     d/help                  - Reprint comands\n")
         return True
-        
+    
 
     return False
 
 def join_chatroom(new_chatroom):
     global current_chatroom
 
+    send_join_msg = False
     with members_lock:
         members.setdefault(new_chatroom, set())
-        if username in members[new_chatroom]:
-            print(f"Currently a member of {new_chatroom}.")
-            return
-        
-        members[new_chatroom].add(username)
+        if username not in members[new_chatroom]:
+            members[new_chatroom].add(username)
+            send_join_msg = True
+        else:
+
+            with console_lock:
+                print(f"You are listed as a member of {new_chatroom}.")
+
+
+    with room_state_lock:
         current_chatrooms.add(new_chatroom)
         current_chatroom = new_chatroom
 
     with rooms_lock:
         all_rooms.add(new_chatroom)
 
-    join_msg = {
-        "type": "join",
-        "msg_id": new_id(),
-        "user": username,
-        "room": new_chatroom,
-        "addr": [MY_HOST, MY_PORT],
-        "ttl": 5,
-    }
-    forward(join_msg)
+    if send_join_msg:
+        join_msg = {
+            "type": "join",
+            "msg_id": new_id(),
+            "user": username,
+            "room": new_chatroom,
+            "addr": [MY_HOST, MY_PORT],
+            "ttl": 5,
+        }
+        forward(join_msg)
+
     forward({
     "type": "focus_enter",
     "msg_id": new_id(),
@@ -487,7 +571,9 @@ def send_flood(text):
         "ttl": 5,
     }
     forward(msg)
-    print("send global flood")
+
+    with console_lock:
+        print("send global flood")
 
 def main():
     global username, current_chatroom
@@ -495,50 +581,79 @@ def main():
     threading.Thread(target=listener, daemon=True).start()
     ready.wait()
 
-    username = input("Enter your username: ").strip() or f"user{uuid.uuid4().hex[:4]}"
-    # bootstrap()
+    with console_lock:
+        username = input("Enter your username: ").strip() or f"user{uuid.uuid4().hex[:4]}"
     
-    # with neighbors_lock:
-        # if not neighbors and MY_PORT != BASE_PORT:
     if MY_PORT != BASE_PORT:
-        print("[bootstrap] Waiting for a handshake...")
+
+        with console_lock:
+            print("[bootstrap] Waiting for a handshake...")
         while not handshake_done.is_set():
             peer_found.clear()
 
-            bootstrap()
+            bootstrap()# uses the fixed t.join() 
 
             if peer_found.is_set():
-                print(f"[bootstrap] Peer found. Waiting for handshake response.")
+
+                with console_lock:
+                    print(f"[bootstrap] Peer found. Waiting for handshake response.")
                 if handshake_done.wait(timeout=5):
-                    print("[bootstrap] Handshake successful!")
+
+                    with console_lock:
+                        print("[bootstrap] Handshake successful!")
                     break
                 else:
-                    print("[bootstrap] Handshake timed out. Retrying.")
+
+                    with console_lock:
+                        print("[bootstrap] Handshake timed out. Retrying.")
             else:
-                print("[bootstrap] No peers found, trying again.")
+
+                with console_lock:
+                    print("[bootstrap] No peers found, trying again.")
                 time.sleep(5)
     
-    initial_chatroom = input("\nEnter chatroom name: ").strip() or "lobby"
-    join_chatroom(initial_chatroom)
+    while username_check(username):
+        with console_lock:
+            print(f"[SYSTEM] Username '{username}' is already taken. Please choose another.")
+            username = input("Enter a new username: ").strip()
+            
+            # In case the user just hits Enter, assign a new random name
+            if not username:
+                username = f"user{uuid.uuid4().hex[:4]}"
 
-    print("\nAvailable commands:")
-    print("     d/Join <chatroom>         - Joins a new chatroom")
-    print("     d/Switch <chatroom>       - Switches to a different chatroom")
-    print("     d/Rooms                   - Lists your current chatrooms")
-    print("     d/Flood <message>         - Sends a message to everyone and every room")
-    print("     d/discoverTopic <topic>   - Input topic you want to send message to, then will input a message to send")
-    print("     d/discoverRoom <room>     - Input room you want to send message to, then will input a message to send")
-    print("     d/help                    - Reprint comands")
+    with console_lock:
+        initial_chatroom = input("\nEnter chatroom name: ").strip() or "lobby"
+    true_chatroom = room_checker(initial_chatroom)
+    join_chatroom(true_chatroom)
+
+
+    with console_lock:
+        print("\nAvailable commands:")
+        print("     d/Join <chatroom>         - Joins a new chatroom")
+        print("     d/Switch <chatroom>       - Switches to a different chatroom")
+        print("     d/Rooms                   - Lists your current chatrooms")
+        print("     d/Flood <message>         - Sends a message to everyone and every room")
+        print("     d/discoverTopic <topic>   - Input topic you want to send message to, then will input a message to send")
+        print("     d/help                  - Reprint comands\n")
 
     while True:
         try:
-            text = input(f"[{current_chatroom}]> ").strip()
+
+            with room_state_lock:
+                    prompt_room = current_chatroom
+                
+            # Take input WITHOUT holding the console lock
+            text = input(f"[{prompt_room}]> ").strip()
+
             if not text:
                 continue
 
             if text.lower() in ("exit", "quit"):
-                # Send leave messages for all rooms
-                for room in current_chatrooms:
+
+                with room_state_lock:
+                    chatrooms_copy = set(current_chatrooms)
+                
+                for room in chatrooms_copy:
                     leave_msg = {
                         "type": "leave",
                         "msg_id": new_id(),
@@ -548,7 +663,9 @@ def main():
                         "ttl": 5,
                     }
                     forward(leave_msg)
-                print("exiting...")
+
+                with console_lock:
+                    print("exiting...")
                 break
 
             # Handle room management commands
@@ -556,108 +673,37 @@ def main():
                 continue
 
             # Send chat message to active room
+            with room_state_lock:
+                local_room = current_chatroom
+            
             msg = {
                 "type": "chat",
                 "msg_id": new_id(),
                 "user": username,
-                "room": current_chatroom,
+                "room": local_room,
                 "text": text,
                 "addr": [MY_HOST, MY_PORT],
                 "ttl": 5,
             }
             forward(msg)
 
-    # print("\nQuerying network for available rooms...")
-    # available_rooms = query_rooms()
-    
-    # if available_rooms:
-    #     print("\nAvailable rooms:")
-    #     for idx, r in enumerate(available_rooms, 1):
-    #         with members_lock:
-    #             member_count = len(members.get(r, set()))
-    #         print(f"  {idx}. {r} ({member_count} members)")
-    # else:
-    #     print("No rooms found. Create one!")
-        
-    # room = input("\nEnter room name: ").strip() or "lobby"
-    # answer = input(f"Is this the room you want to join? Check spellling. (y/n): ")
-    # while answer.lower()== 'n' or answer.lower() == 'no': 
-    #     room = input("\nEnter room name: ").strip() or "lobby"
-    #     answer = input(f"Is this the room you want to join? Check spellling. (y/n): ")
-
-    # # Fixed ISSUE
-    # # if a completely new user joins, they won't see the members that joined before them.
-    # with members_lock:
-    #     members.setdefault(room, set())
-    #     while username in members[room]:
-    #         username = input("[ACTION NEEDED] User already has this name, enter a new one: ")
-
-    #     members[room].add(username)
-
-    #     print(f"[debug] neighbors now: {members}")
-
-    # with rooms_lock:
-    #     all_rooms.add(room)
-
-    # join_msg = {
-    #     "type": "join",
-    #     "msg_id": new_id(),
-    #     "user": username,
-    #     "room": room,
-    #     "addr": [MY_HOST, MY_PORT],
-    #     "ttl": 5,
-    # }
-    # forward(join_msg)
-
-    # room_announce = {
-    #     "type": "room_announce",
-    #     "msg_id": new_id(),
-    #     "addr": [MY_HOST, MY_PORT],
-    #     "rooms": [room],
-    #     "ttl": 3,
-    # }
-    # forward(room_announce)
-
-    # while True:
-    #     try:
-    #         text = input("> ").strip()
-    #         if not text:
-    #             continue
-
-    #         if text.lower() in ("exit", "quit"):# or KeyboardInterrupt:
-    #             leave_msg = {
-    #                 "type": "leave",
-    #                 "msg_id": new_id(),
-    #                 "user": username,
-    #                 "room": room,
-    #                 "addr": [MY_HOST, MY_PORT],
-    #                 "ttl": 5,
-    #             }
-    #             forward(leave_msg)
-    #             print("exiting...")
-    #             break
-
-    #         msg = {
-    #             "type": "chat",
-    #             "msg_id": new_id(),
-    #             "user": username,
-    #             "room": room,
-    #             "text": text,
-    #             "addr": [MY_HOST, MY_PORT],
-    #             "ttl": 5,
-    #         }
-    #         forward(msg)
         except KeyboardInterrupt:
+            
+            with room_state_lock:
+                local_room = current_chatroom
+            
             leave_msg = {
                 "type": "leave",
                 "msg_id": new_id(),
                 "user": username,
-                "room": current_chatroom,
+                "room": local_room,
                 "addr": [MY_HOST, MY_PORT],
                 "ttl": 5,
             }
             forward(leave_msg)
-            print("\nKeyboard Interrupt detected.\nUser forcefully exited program.")
+            
+            with console_lock:
+                print("\nKeyboard Interrupt detected.\nUser forcefully exited program.")
             break
             
 if __name__ == "__main__":

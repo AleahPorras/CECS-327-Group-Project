@@ -1,5 +1,5 @@
-$ScriptFile = "stupid.py"
-$PeerCount = 4
+$ScriptFile = "peers.py"
+$PeerCount = 3
 
 Write-Host "Starting Peer 1 (Base)..."
 # Start the first (base) peer

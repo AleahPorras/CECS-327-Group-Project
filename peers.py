@@ -18,7 +18,7 @@ members = {}
 members_lock = threading.Lock()
 subscriptions = set() # for fooding
 console_lock = threading.Lock()
-room_state_lock = threading.Lock() # <<< LOCK ADDED
+room_state_lock = threading.Lock()
 
 
 # room management

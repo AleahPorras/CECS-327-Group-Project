@@ -2,6 +2,10 @@
 Note:  broker.py, server-xmlrpc.py, and client-xmlrpc.py are the only files you will NEED to run. Other files are for documentation and were used to understand how to implement all these forms of communication together.<br>
 Creating a less complex chat system for small niche communities, users who care for their privacy, and students who have temporary groups for assignments.
 
+Peer to Peer Update: 
+- All you need to do is now run peer.py
+- You can open many peers, join rooms, and enter commands
+  
 1. Requirements and Dependencies
 
 All implemented components are written in Python 3.x.

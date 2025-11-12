@@ -102,7 +102,6 @@ def bootstrap():
         t.start()
         threads.append(t)
         
-    # --- CONNECTION FIX ---
     # Wait for all threads to finish, don't use a racy 5-second timeout
     for t in threads:
         t.join() 
@@ -123,11 +122,8 @@ def forward(msg, exclude =None):
             continue
         send_msg(n, msg)
 
-#
-# --- THIS IS THE FULLY FIXED handle_msg FUNCTION ---
-#
+
 def handle_msg(msg, tcp_addr):
-    # --- LOCKS ADDED (Snapshot Pattern) ---
     with room_state_lock:
         local_current_room = current_chatroom
         local_current_rooms = set(current_chatrooms) # make a copy
@@ -218,8 +214,6 @@ def handle_msg(msg, tcp_addr):
             all_rooms.update(rooms)
         return
 
-    # --- "FORWARD FIRST" PATTERN (THE CRITICAL SYNC FIX) ---
-    # We forward *everything* else *before* processing it locally
     forward(msg, exclude=real_addr)
 
     if mtype == "room_announce":
@@ -247,7 +241,6 @@ def handle_msg(msg, tcp_addr):
                 return 
             members[msg_room].add(msg_user)
         
-        # --- "Noisy Join" FIX ---
         if msg_room == local_current_room:
             
             with console_lock:
@@ -281,7 +274,6 @@ def handle_msg(msg, tcp_addr):
         return
 
     if mtype =="focus_enter":
-        # --- "Noisy Join" FIX ---
         if msg_room == local_current_room:
             
             with console_lock:
@@ -289,14 +281,12 @@ def handle_msg(msg, tcp_addr):
         return
     
     if mtype == "focus_leave":
-        # --- "Noisy Join" FIX ---
         if msg_room == local_current_room:
             
             with console_lock:
                 print(f"\r[{msg_room}] {msg_user} has left the chat.\n[{local_current_room}]> ", end="", flush=True)
         return
 
-    # --- ROOM FILTER ---
     if msg_room is not None and msg_room != local_current_room:
         return # Not for our active room, and we've already forwarded it.
     
@@ -305,9 +295,6 @@ def handle_msg(msg, tcp_addr):
         with console_lock:
             print(f"\r[{msg_room}] {msg_user}: {msg['text']}\n[{local_current_room}]> ", end = "", flush = True)
         return
-#
-# --- END OF FIXED handle_msg ---
-#
 
 # read one TCP and feed all messages on it into handle_msg function
 def handle_conn(conn, addr):
@@ -643,17 +630,8 @@ def main():
         answer = input(f"Is this the room you want to join? Check spellling. (y/n): ")
 
     
-    
-    # if answer == 
-    # with console_lock:
-    #     initial_chatroom = input("\nEnter chatroom name: ").strip() or "lobby"
-    # join_chatroom(room)
-
-    
-    # with console_lock:
-    #     initial_chatroom = input("\nEnter chatroom name: ").strip() or "lobby"
     true_chatroom = room_checker(room)
-    join_chatroom(room)
+    join_chatroom(true_chatroom)
 
 
     with console_lock:

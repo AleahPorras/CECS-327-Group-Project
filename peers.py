@@ -620,11 +620,40 @@ def main():
             # In case the user just hits Enter, assign a new random name
             if not username:
                 username = f"user{uuid.uuid4().hex[:4]}"
-
+    
     with console_lock:
-        initial_chatroom = input("\nEnter chatroom name: ").strip() or "lobby"
-    true_chatroom = room_checker(initial_chatroom)
-    join_chatroom(true_chatroom)
+        print("\nQuerying network for available rooms...")
+    available_rooms = query_rooms()
+    
+    if available_rooms:
+        with console_lock:
+            print("\nAvailable rooms:")
+        for idx, r in enumerate(available_rooms, 1):
+            with members_lock:
+                member_count = len(members.get(r, set()))
+            print(f"  {idx}. {r} ({member_count} members)")
+    else:
+        with console_lock:
+            print("No rooms found. Create one!")
+        
+    room = input("\nEnter room name: ").strip() or "lobby"
+    answer = input(f"Is this the room you want to join? Check spellling. (y/n): ")
+    while answer.lower()== 'n' or answer.lower() == 'no': 
+        room = input("\nEnter room name: ").strip() or "lobby"
+        answer = input(f"Is this the room you want to join? Check spellling. (y/n): ")
+
+    
+    
+    # if answer == 
+    # with console_lock:
+    #     initial_chatroom = input("\nEnter chatroom name: ").strip() or "lobby"
+    # join_chatroom(room)
+
+    
+    # with console_lock:
+    #     initial_chatroom = input("\nEnter chatroom name: ").strip() or "lobby"
+    true_chatroom = room_checker(room)
+    join_chatroom(room)
 
 
     with console_lock:

@@ -20,6 +20,9 @@ subscriptions = set() # for fooding
 console_lock = threading.Lock()
 room_state_lock = threading.Lock()
 
+##& ------For lamport clocks------##
+timestamp = 0
+lock_lamport = threading.Lock()
 
 # room management
 all_rooms = set()
@@ -57,9 +60,10 @@ def network(port):
         
         with room_state_lock:
             local_room = current_chatroom
-
+        found_time = increment_timestamp()
         msg = {
                     "type": "ping",
+                    "lamport": found_time,
                     "msg_id": new_id(),
                     "addr": [MY_HOST, MY_PORT],
                     "room": local_room, # Use locked value
@@ -122,8 +126,12 @@ def forward(msg, exclude =None):
             continue
         send_msg(n, msg)
 
-
 def handle_msg(msg, tcp_addr):
+
+    # ##& incorporates new lamport clock times##
+    current_time = msg.get("lamport", 0)
+    updating_lamport_time(current_time)
+
     with room_state_lock:
         local_current_room = current_chatroom
         local_current_rooms = set(current_chatrooms) # make a copy
@@ -150,8 +158,10 @@ def handle_msg(msg, tcp_addr):
         # Ping/Pong does not get forwarded, it's a direct conversation.
         if local_current_room is not None and msg_room is not None and msg_room != local_current_room:
             return
+        found_time = increment_timestamp()
         send_msg(real_addr, {
             "type": "pong",
+            "lamport": found_time,
             "msg_id": new_id(),
             "addr": [MY_HOST, MY_PORT],
             "room": local_current_room,
@@ -159,9 +169,11 @@ def handle_msg(msg, tcp_addr):
         # Send member sync on ping
         with members_lock:
             if members: 
+                found_time = increment_timestamp()
                 members_json = {r: list(users) for r, users in members.items()}
                 send_msg(real_addr, {
                     "type": "member_sync",
+                    "lamport": found_time,
                     "msg_id": new_id(),
                     "addr": [MY_HOST, MY_PORT],
                     "members": members_json,
@@ -169,10 +181,12 @@ def handle_msg(msg, tcp_addr):
                 
         with rooms_lock:
             if all_rooms:
+                found_time = increment_timestamp()
                 send_msg(real_addr, {
                     "type": "room_announce",
                     "msg_id": new_id(),
                     "addr": [MY_HOST, MY_PORT],
+                    "lamport": found_time,
                     "rooms": list(all_rooms),
                     "ttl": 3,
                 })
@@ -186,7 +200,7 @@ def handle_msg(msg, tcp_addr):
         if local_current_room is None or msg_room is None or msg_room == local_current_room:
             
             with console_lock:
-                print(f"\r[handshake] connection established with {real_addr}\n> ", end = "", flush = True)
+                print(f"\r[handshake] <Timestamp:{current_time}> connection established with {real_addr}\n> ", end = "", flush = True)
             handshake_done.set()
         return
     
@@ -200,8 +214,10 @@ def handle_msg(msg, tcp_addr):
 
     if mtype == "room_query":
         with rooms_lock:
+            found_time = increment_timestamp()
             send_msg(real_addr, {
                 "type": "room_response",
+                "lamport": found_time,
                 "msg_id": new_id(),
                 "addr": [MY_HOST, MY_PORT],
                 "rooms": list(all_rooms),
@@ -228,7 +244,7 @@ def handle_msg(msg, tcp_addr):
         text = msg.get("text", "")
         
         with console_lock:
-            print(f"\r[FLOOD] {src}: {text}\n[{local_current_room}]> ", end="", flush=True)
+            print(f"\r[FLOOD] <Timestamp:{current_time}> {src}: {text}\n[{local_current_room}]> ", end="", flush=True)
         return
 
     if mtype == "join":
@@ -244,7 +260,7 @@ def handle_msg(msg, tcp_addr):
         if msg_room == local_current_room:
             
             with console_lock:
-                print(f"\r{msg_user} joined {msg_room}\n> ", end = "", flush = True)
+                print(f"\r<Timestamp:{current_time}> {msg_user} <Timestamp:{current_time}> joined {msg_room}\n> ", end = "", flush = True)
         
         with rooms_lock:
             all_rooms.add(msg_room)
@@ -260,7 +276,7 @@ def handle_msg(msg, tcp_addr):
         if user_was_in_room and local_current_room == msg_room:
             
             with console_lock:
-                print(f"\r{msg_user} left {msg_room}\n> ", end = "", flush = True)
+                print(f"\r<Timestamp:{current_time}> {msg_user} left {msg_room}\n> ", end = "", flush = True)
         return 
 
     if mtype == "discoverTopic": 
@@ -269,7 +285,7 @@ def handle_msg(msg, tcp_addr):
             if topic_name in " ".join(chatroom.lower().split()):
                 
                 with console_lock:
-                    print(f"\r[{topic_name} ANNONCEMENT] {msg_user}: {msg['text']}\n[{local_current_room}]> ", end = "", flush = True)
+                    print(f"\r[{topic_name} ANNONCEMENT] <Timestamp:{current_time}> {msg_user}: {msg['text']}\n[{local_current_room}]> ", end = "", flush = True)
                 break
         return
 
@@ -277,14 +293,14 @@ def handle_msg(msg, tcp_addr):
         if msg_room == local_current_room:
             
             with console_lock:
-                print(f'\r[{msg_room}] {msg_user} is now active here.\n[{local_current_room}]> ', end='', flush=True)
+                print(f'\r[{msg_room}] <Timestamp:{current_time}> {msg_user} is now active here.\n[{local_current_room}]> ', end='', flush=True)
         return
     
     if mtype == "focus_leave":
         if msg_room == local_current_room:
             
             with console_lock:
-                print(f"\r[{msg_room}] {msg_user} has left the chat.\n[{local_current_room}]> ", end="", flush=True)
+                print(f"\r[{msg_room}] <Timestamp:{current_time}> {msg_user} has left the chat.\n[{local_current_room}]> ", end="", flush=True)
         return
 
     if msg_room is not None and msg_room != local_current_room:
@@ -293,7 +309,7 @@ def handle_msg(msg, tcp_addr):
     if mtype == "chat":
         
         with console_lock:
-            print(f"\r[{msg_room}] {msg_user}: {msg['text']}\n[{local_current_room}]> ", end = "", flush = True)
+            print(f"\r[{msg_room}] <Timestamp:{current_time}> {msg_user}: {msg['text']}\n[{local_current_room}]> ", end = "", flush = True)
         return
 
 # read one TCP and feed all messages on it into handle_msg function
@@ -331,8 +347,10 @@ def listener():
         threading.Thread(target=handle_conn, args=(c, a), daemon=True).start()
 
 def query_rooms():
+    found_time = increment_timestamp()
     msg = {
         "type": "room_query",
+        "lamport": found_time,
         "msg_id": new_id(),
         "addr": [MY_HOST, MY_PORT],
         "ttl": 3,
@@ -409,6 +427,7 @@ def commands(user_input):
                     "room": old_room,
                     "addr": [MY_HOST, MY_PORT],
                     "ttl": 5,
+                    "lamport": increment_timestamp(), ##& Adds lamport time to the message output ##
                 })
             
 
@@ -422,6 +441,7 @@ def commands(user_input):
                 "room": chatroom_name,
                 "addr": [MY_HOST, MY_PORT],
                 "ttl": 5,
+                "lamport": increment_timestamp(), ##& Adds lamport time to the message output ##
             })
         return True
 
@@ -462,6 +482,7 @@ def commands(user_input):
 
         with console_lock:
             txt = input("Enter your message: ")
+        found_time = increment_timestamp()
         msg = {
                 "type": "discoverTopic",
                 "topic": topic,
@@ -470,6 +491,7 @@ def commands(user_input):
                 "text": txt,
                 "addr": [MY_HOST, MY_PORT],
                 "ttl": 5,
+                "lamport": found_time, ##& Adds lamport time to the message output ##
             }
         forward(msg)
         return True
@@ -479,6 +501,7 @@ def commands(user_input):
 
         with console_lock:
             txt = input("Enter your message: ")
+        found_time = increment_timestamp()
         msg = {
                 "type": "discoverRoom",
                 "room": room,
@@ -487,6 +510,7 @@ def commands(user_input):
                 "text": txt,
                 "addr": [MY_HOST, MY_PORT],
                 "ttl": 5,
+                "lamport": found_time,
             }
         forward(msg)
         return True
@@ -529,6 +553,7 @@ def join_chatroom(new_chatroom):
         all_rooms.add(new_chatroom)
 
     if send_join_msg:
+        found_time = increment_timestamp()
         join_msg = {
             "type": "join",
             "msg_id": new_id(),
@@ -536,6 +561,7 @@ def join_chatroom(new_chatroom):
             "room": new_chatroom,
             "addr": [MY_HOST, MY_PORT],
             "ttl": 5,
+            "lamport": found_time, ##& Adds lamport time to the message output ##
         }
         forward(join_msg)
 
@@ -546,6 +572,7 @@ def join_chatroom(new_chatroom):
     "room": new_chatroom,
     "addr": [MY_HOST, MY_PORT],
     "ttl": 5,
+    "lamport": found_time, ##& Adds lamport time to the message output ##
 })
 
 def send_flood(text):
@@ -556,11 +583,31 @@ def send_flood(text):
         "text": text,
         "addr": [MY_HOST, MY_PORT],
         "ttl": 5,
+        "lamport": increment_timestamp(),
+        
     }
     forward(msg)
 
     with console_lock:
         print("send global flood")
+
+# def lamport_timestamp_lookup():
+#     with lock_lamport:
+#         return timestamp
+    
+##& gets logical clock value for sent messages ##
+def increment_timestamp():
+    global timestamp
+    with lock_lamport:
+        timestamp += 1
+        return timestamp
+
+##& Updates the current clock time ##
+def updating_lamport_time(current_time):
+    global timestamp
+    with lock_lamport:
+        timestamp = max(timestamp, current_time) + 1 # increments the max lamport time each time a new message is sent
+        return timestamp
 
 def main():
     global username, current_chatroom
@@ -661,6 +708,7 @@ def main():
                     chatrooms_copy = set(current_chatrooms)
                 
                 for room in chatrooms_copy:
+                    found_time = increment_timestamp()
                     leave_msg = {
                         "type": "leave",
                         "msg_id": new_id(),
@@ -668,6 +716,7 @@ def main():
                         "room": room,
                         "addr": [MY_HOST, MY_PORT],
                         "ttl": 5,
+                        "lamport": found_time, ##& Adds lamport time to the message output ##
                     }
                     forward(leave_msg)
 
@@ -683,6 +732,7 @@ def main():
             with room_state_lock:
                 local_room = current_chatroom
             
+            found_time = increment_timestamp()
             msg = {
                 "type": "chat",
                 "msg_id": new_id(),
@@ -691,6 +741,7 @@ def main():
                 "text": text,
                 "addr": [MY_HOST, MY_PORT],
                 "ttl": 5,
+                "lamport": found_time, ##& Adds lamport time to the message output ##
             }
             forward(msg)
 
@@ -698,7 +749,7 @@ def main():
             
             with room_state_lock:
                 local_room = current_chatroom
-            
+            found_time = increment_timestamp()
             leave_msg = {
                 "type": "leave",
                 "msg_id": new_id(),
@@ -706,6 +757,7 @@ def main():
                 "room": local_room,
                 "addr": [MY_HOST, MY_PORT],
                 "ttl": 5,
+                "lamport": found_time, ##& Adds lamport time to the message output ##
             }
             forward(leave_msg)
             

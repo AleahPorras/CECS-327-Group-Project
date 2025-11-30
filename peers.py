@@ -31,6 +31,25 @@ cs_request_ts = None
 cs_pending = set()
 cs_deferred = set()
 
+# ---- Transaction / reservation state ----
+tx_lock = threading.Lock()
+
+# Local reservation table: station_id -> list of (start, end, username, tx_id)
+reservations = {}
+
+# Active transactions: tx_id -> {
+#   "user": str,
+#   "ops": list of pending operations,
+#   "status": "active"|"prepared"|"committed"|"aborted"
+# }
+transactions = {}
+
+# Current transaction for this peer (one at a time for simplicity)
+current_tx_id = None
+
+# Pinned messages: room_name -> (text, user, tx_id)
+pinned_messages = {}
+
 # room management
 all_rooms = set()
 rooms_lock = threading.Lock()
@@ -164,6 +183,12 @@ def handle_msg(msg, tcp_addr):
         return
     if mtype == "cs_reply":
         handle_cs_reply(msg, real_addr)
+        return
+    if mtype == "tx_commit":
+        handle_tx_commit(msg, real_addr)
+        return
+    if mtype == "tx_abort":
+        handle_tx_abort(msg, real_addr)
         return
 
     msg_room = msg.get("room")
@@ -468,6 +493,50 @@ def commands(user_input):
         release_cs()
         return True
 
+    # ---- Transaction commands ----
+    elif user_input.startswith("tx/begin"):
+        begin_transaction()
+        return True
+
+    elif user_input.startswith("tx/reserve "):
+        parts = user_input.split()
+        if len(parts) != 4:
+            with console_lock:
+                print("Usage: tx/reserve <station_id> <start> <end>")
+            return True
+        station_id, start, end = parts[1], parts[2], parts[3]
+        add_reservation_op(station_id, start, end)
+        return True
+
+    elif user_input.startswith("tx/commit"):
+        commit_transaction()
+        return True
+
+    elif user_input.startswith("tx/abort"):
+        abort_transaction()
+        return True
+
+    # ---- High-level text feature: pin message in current room ----
+    elif user_input.startswith("d/Pin "):
+        text = user_input[len("d/Pin "):].strip()
+        if not text:
+            with console_lock:
+                print("Usage: d/Pin <message text>")
+            return True
+
+        with room_state_lock:
+            room = current_chatroom
+        if not room:
+            with console_lock:
+                print("You must be in a room to pin a message.")
+            return True
+
+        # Run a single-operation transaction for this pin
+        begin_transaction()
+        add_pin_op(room, text)
+        commit_transaction()
+        return True
+
     elif user_input.startswith("d/Flood "):
         txt = user_input[len("d/Flood "):].strip()
         if not txt:
@@ -738,6 +807,284 @@ def handle_cs_reply(msg, real_addr):
             with console_lock:
                 print ("[CS] All replies received. Entering CS mode.")
 
+def with_global_cs(fn):
+    """
+    Run fn() while holding the distributed critical section (Lamport CS).
+    """
+    request_cs()
+
+    # Busy-wait until we are in CS mode
+    while True:
+        with cs_lock:
+            if cs_state == "in_cs":
+                break
+        time.sleep(0.05)
+
+    try:
+        fn()
+    finally:
+        release_cs()
+
+
+def begin_transaction():
+    """Start a new local transaction for the current user."""
+    global current_tx_id
+
+    with tx_lock:
+        if current_tx_id is not None:
+            with console_lock:
+                print(f"[TX] A transaction is already active: {current_tx_id}")
+            return
+
+        tx_id = new_id()
+        current_tx_id = tx_id
+        transactions[tx_id] = {
+            "user": username,
+            "ops": [],
+            "status": "active",
+        }
+
+    with console_lock:
+        print(f"[TX] Began transaction {tx_id} for user {username}")
+
+
+def add_reservation_op(station_id, start, end):
+    """Add a reservation operation to the current transaction."""
+    global current_tx_id
+    with tx_lock:
+        if current_tx_id is None:
+            with console_lock:
+                print("[TX] No active transaction. Use tx/begin first.")
+            return
+        tx = transactions.get(current_tx_id)
+        if not tx or tx["status"] != "active":
+            with console_lock:
+                print(f"[TX] Cannot add operations, transaction is {tx['status'] if tx else 'unknown'}")
+            return
+        tx["ops"].append(("reserve", station_id, start, end))
+
+    with console_lock:
+        print(f"[TX] Added reserve({station_id}, {start}, {end}) to {current_tx_id}")
+
+def add_pin_op(room_name, text):
+    """Add a pin-message operation to the current transaction."""
+    global current_tx_id
+    with tx_lock:
+        if current_tx_id is None:
+            with console_lock:
+                print("[TX] No active transaction. Use tx/begin first.")
+            return
+        tx = transactions.get(current_tx_id)
+        if not tx or tx["status"] != "active":
+            with console_lock:
+                print(f"[TX] Cannot add operations, transaction is {tx['status'] if tx else 'unknown'}")
+            return
+        tx["ops"].append(("pin", room_name, text))
+
+    with console_lock:
+        print(f"[TX] Added pin({room_name}, {text!r}) to {current_tx_id}")
+
+def times_overlap(start1, end1, start2, end2):
+    """
+    Simple interval overlap check.
+    For the project you can keep start/end as strings that compare lexicographically.
+    """
+    return not (end1 <= start2 or end2 <= start1)
+
+
+def validate_transaction(tx_id, tx):
+    """
+    Ensure there are no conflicting reservations (no double booking).
+    We only validate 'reserve' ops; other kinds (e.g. 'pin') are ignored here.
+    """
+    ops = tx["ops"]
+
+    for op in ops:
+        if not op:
+            continue
+        kind = op[0]
+        if kind != "reserve":
+            continue
+
+        # Now we know it's a reserve op: ("reserve", station_id, start, end)
+        _, station_id, start, end = op
+        existing = reservations.get(station_id, [])
+        for (s, e, u, other_tx) in existing:
+            # If time windows overlap and it's not the same transaction, it's a conflict
+            if times_overlap(start, end, s, e) and other_tx != tx_id:
+                return False
+
+    return True
+
+def apply_transaction(tx_id, tx):
+    """Apply all operations in a committed transaction (reservations, pins, etc.)."""
+    ops = tx["ops"]
+    user = tx["user"]
+    for op in ops:
+        kind = op[0]
+
+        if kind == "reserve":
+            _, station_id, start, end = op
+            reservations.setdefault(station_id, []).append(
+                (start, end, user, tx_id)
+            )
+
+        elif kind == "pin":
+            _, room_name, text = op
+            pinned_messages[room_name] = (text, user, tx_id)
+
+            # If this is our current room, show the pinned message nicely
+            with room_state_lock:
+                local_room = current_chatroom
+            if room_name == local_room:
+                with console_lock:
+                    print(
+                        f"\r[PINNED in {room_name}] {user}: {text}\n[{local_room}]> ",
+                        end="",
+                        flush=True,
+                    )
+
+def broadcast_tx_commit(tx_id, tx):
+    """Broadcast a commit message so all peers apply the transaction."""
+    found_time = increment_timestamp()
+    msg = {
+        "type": "tx_commit",
+        "msg_id": new_id(),
+        "lamport": found_time,
+        "addr": [MY_HOST, MY_PORT],
+        "tx_id": tx_id,
+        "user": tx["user"],
+        "ops": tx["ops"],
+        "ttl": 5,
+    }
+    forward(msg)
+
+
+def broadcast_tx_abort(tx_id, tx):
+    """Broadcast an abort message so all peers roll back the transaction."""
+    found_time = increment_timestamp()
+    msg = {
+        "type": "tx_abort",
+        "msg_id": new_id(),
+        "lamport": found_time,
+        "addr": [MY_HOST, MY_PORT],
+        "tx_id": tx_id,
+        "user": tx["user"],
+        "ttl": 5,
+    }
+    forward(msg)
+
+
+def commit_transaction():
+    """Commit the current transaction using the global CS for atomicity."""
+    global current_tx_id
+    with tx_lock:
+        if current_tx_id is None:
+            with console_lock:
+                print("[TX] No active transaction to commit.")
+            return
+        tx_id = current_tx_id
+
+    def do_commit():
+        # This runs inside the distributed critical section
+        with tx_lock:
+            tx = transactions.get(tx_id)
+            if not tx or tx["status"] != "active":
+                with console_lock:
+                    print(f"[TX] Cannot commit, transaction {tx_id} not active.")
+                return
+
+            # Validate operations against current reservations
+            if not validate_transaction(tx_id, tx):
+                tx["status"] = "aborted"
+                broadcast_tx_abort(tx_id, tx)
+                with console_lock:
+                    print(f"[TX] Transaction {tx_id} aborted due to conflicts.")
+                return
+
+            # Apply changes locally
+            apply_transaction(tx_id, tx)
+            tx["status"] = "committed"
+
+        # Notify everyone to apply the same transaction
+        broadcast_tx_commit(tx_id, tx)
+
+        with console_lock:
+            print(f"[TX] Transaction {tx_id} committed.")
+
+    with_global_cs(do_commit)
+
+    # Clear current_tx_id after commit/abort path
+    with tx_lock:
+        current_tx_id = None
+
+
+def abort_transaction():
+    """Abort the current transaction explicitly."""
+    global current_tx_id
+    with tx_lock:
+        if current_tx_id is None:
+            with console_lock:
+                print("[TX] No active transaction to abort.")
+            return
+        tx_id = current_tx_id
+        tx = transactions.get(tx_id)
+        if not tx or tx["status"] != "active":
+            with console_lock:
+                print(f"[TX] Cannot abort, transaction {tx_id} not active.")
+            return
+        tx["status"] = "aborted"
+
+    broadcast_tx_abort(tx_id, tx)
+
+    with console_lock:
+        print(f"[TX] Transaction {tx_id} aborted by user.")
+
+    with tx_lock:
+        current_tx_id = None
+
+
+def handle_tx_commit(msg, real_addr):
+    """Handle a tx_commit message from another peer."""
+    tx_id = msg.get("tx_id")
+    user = msg.get("user")
+    ops = msg.get("ops", [])
+
+    with tx_lock:
+        # Create or update local record
+        tx = transactions.setdefault(tx_id, {
+            "user": user,
+            "ops": ops,
+            "status": "committed",
+        })
+        tx["ops"] = ops
+        tx["status"] = "committed"
+        apply_transaction(tx_id, tx)
+
+    with console_lock:
+        print(f"\r[TX] Commit received for {tx_id} (user={user}). Reservations applied.\n> ", end="", flush=True)
+
+
+def handle_tx_abort(msg, real_addr):
+    """Handle a tx_abort message from another peer."""
+    tx_id = msg.get("tx_id")
+    user = msg.get("user")
+
+    with tx_lock:
+        tx = transactions.setdefault(tx_id, {
+            "user": user,
+            "ops": [],
+            "status": "aborted",
+        })
+        tx["status"] = "aborted"
+        # Rollback: remove any reservations tagged with this tx_id
+        for station_id, lst in list(reservations.items()):
+            new_lst = [entry for entry in lst if entry[3] != tx_id]
+            reservations[station_id] = new_lst
+
+    with console_lock:
+        print(f"\r[TX] Abort received for {tx_id} (user={user}). Any tentative changes rolled back.\n> ", end="", flush=True)
+
 
 def main():
     global username, current_chatroom
@@ -820,7 +1167,10 @@ def main():
         print("     d/CS                      - Requests CS mode")
         print("     d/Done                    - Leaves CS mode")
         print("     d/discoverTopic <topic>   - Input topic you want to send message to, then will input a message to send")
+        print("     d/Pin <message>           - Pin a message in the current room (uses a transaction)")
         print("     d/help                  - Reprint comands\n")
+        
+
 
     while True:
         try:

@@ -24,6 +24,13 @@ room_state_lock = threading.Lock()
 timestamp = 0
 lock_lamport = threading.Lock()
 
+#one global critical section for the whole node
+cs_lock = threading.Lock()
+cs_state = "idle"
+cs_request_ts = None
+cs_pending = set()
+cs_deferred = set()
+
 # room management
 all_rooms = set()
 rooms_lock = threading.Lock()
@@ -151,6 +158,14 @@ def handle_msg(msg, tcp_addr):
         seen.add(mid)
 
     mtype    = msg.get("type")
+
+    if mtype == "cs_request":
+        handle_cs_request(msg, real_addr)
+        return
+    if mtype == "cs_reply":
+        handle_cs_reply(msg, real_addr)
+        return
+
     msg_room = msg.get("room")
     msg_user = msg.get("user")
 
@@ -445,6 +460,13 @@ def commands(user_input):
             })
         return True
 
+    elif user_input.startswith("d/CS"):
+        request_cs ()
+        return True
+
+    elif user_input.startswith("d/Done"):
+        release_cs()
+        return True
 
     elif user_input.startswith("d/Flood "):
         txt = user_input[len("d/Flood "):].strip()
@@ -523,6 +545,8 @@ def commands(user_input):
             print("     d/Switch <chatroom>       - Switches to a different chatroom")
             print("     d/Rooms                   - Lists your current chatrooms")
             print("     d/Flood <message>         - Sends a message to everyone and every room")
+            print("     d/CS                      - Requests CS mode")
+            print("     d/Done                    - Leaves CS mode")
             print("     d/discoverTopic <topic>   - Input topic you want to send message to, then will input a message to send")
             print("     d/help                  - Reprint comands\n")
         return True
@@ -609,6 +633,112 @@ def updating_lamport_time(current_time):
         timestamp = max(timestamp, current_time) + 1 # increments the max lamport time each time a new message is sent
         return timestamp
 
+def request_cs():
+    global cs_state, cs_request_ts, cs_pending
+
+    with cs_lock:
+        if cs_state =="in_cs":
+            with console_lock:
+                print("You are already in CS mode.")
+            return
+        if cs_state =="requesting":
+            with console_lock:
+                print("[CS] You are already requesting CS mode.")
+                return
+        cs_state = "requesting"
+        cs_request_ts = increment_timestamp()
+        with neighbors_lock:
+            cs_pending = set(neighbors)
+    if not cs_pending:
+        with cs_lock:
+            cs_state = "in_cs"
+        with console_lock:
+            print("[CS] Entered CS.")
+        return
+    msg = {
+        "type": "cs_request",
+        "msg_id": new_id(),
+        "lamport": cs_request_ts,
+        "addr": [MY_HOST, MY_PORT],
+        "ttl": 5,
+    }
+    forward(msg)
+
+    with console_lock:
+        print(f"[CS] Requesting CS at Lamport {cs_request_ts}")
+
+def release_cs():
+    global cs_state, cs_request_ts, cs_pending
+
+    with cs_lock:
+        if cs_state != "in_cs":
+            with console_lock:
+                print("[CS] You are not in CS mode.")
+            return
+
+        cs_state = "idle"
+        cs_request_ts = None
+        to_reply = list(cs_deferred)
+        cs_deferred.clear()
+
+    for addr in to_reply:
+        send_cs_reply(addr)
+    with console_lock:
+        print("[CS] Left CS and send deferred messages.")
+
+def handle_cs_request(msg, real_addr):
+    # reply immediately if in idle, defer if in_cs
+    # if both requesting, compare priority
+    global cs_state, cs_request_ts
+
+    req_ts = msg.get("lamport", 0)
+    requester = tuple(msg.get("addr", real_addr))
+
+    with cs_lock:
+        if cs_state == "idle":
+            send_cs_reply(requester)
+            return
+        if cs_state == "in_cs":
+            cs_deferred.add(requester)
+            return
+
+    my_ts = cs_request_ts
+    my_id = (MY_HOST, MY_PORT)
+    their_id = requester
+
+    my_priority = (my_ts if my_ts is not None else float("inf"), my_id)
+    their_priority = (req_ts, their_id)
+
+    if their_priority < my_priority:
+        send_cs_reply(requester)
+    else:
+        cs_deferred.add(requester)
+
+def send_cs_reply(addr):
+    lam = increment_timestamp()
+    msg = {
+        "type": "cs_reply",
+        "msg_id": new_id(),
+        "lamport": lam,
+        "addr": [MY_HOST, MY_PORT],
+        "ttl": 5,
+    }
+    send_msg(addr, msg)
+
+def handle_cs_reply(msg, real_addr):
+    global cs_state, cs_pending
+
+    sender = real_addr
+    with cs_lock:
+        if cs_state != "requesting":
+            return
+        cs_pending.discard(sender)
+        if not cs_pending:
+            cs_state = "in_cs"
+            with console_lock:
+                print ("[CS] All replies received. Entering CS mode.")
+
+
 def main():
     global username, current_chatroom
 
@@ -687,6 +817,8 @@ def main():
         print("     d/Switch <chatroom>       - Switches to a different chatroom")
         print("     d/Rooms                   - Lists your current chatrooms")
         print("     d/Flood <message>         - Sends a message to everyone and every room")
+        print("     d/CS                      - Requests CS mode")
+        print("     d/Done                    - Leaves CS mode")
         print("     d/discoverTopic <topic>   - Input topic you want to send message to, then will input a message to send")
         print("     d/help                  - Reprint comands\n")
 

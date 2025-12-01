@@ -646,7 +646,7 @@ def join_chatroom(new_chatroom):
         all_rooms.add(new_chatroom)
 
     if send_join_msg:
-        found_time = increment_timestamp()
+        join_time = increment_timestamp()
         join_msg = {
             "type": "join",
             "msg_id": new_id(),
@@ -654,10 +654,11 @@ def join_chatroom(new_chatroom):
             "room": new_chatroom,
             "addr": [MY_HOST, MY_PORT],
             "ttl": 5,
-            "lamport": found_time, ##& Adds lamport time to the message output ##
+            "lamport": join_time, ##& Adds lamport time to the message output ##
         }
         forward(join_msg)
 
+    focus_time = increment_timestamp()
     forward({
     "type": "focus_enter",
     "msg_id": new_id(),
@@ -665,7 +666,7 @@ def join_chatroom(new_chatroom):
     "room": new_chatroom,
     "addr": [MY_HOST, MY_PORT],
     "ttl": 5,
-    "lamport": found_time, ##& Adds lamport time to the message output ##
+    "lamport": focus_time, ##& Adds lamport time to the message output ##
 })
 
 def send_flood(text):

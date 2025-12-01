@@ -230,6 +230,23 @@ def handle_msg(msg, tcp_addr):
                     "rooms": list(all_rooms),
                     "ttl": 3,
                 })
+        # Sends pinned messages on ping (so newcomers can view existing pings)
+        if pinned_messages:
+            found_time = increment_timestamp()
+            pins_payload = {}
+            for room, (text, user, tx_id) in pinned_messages.items():
+                pins_payload[room] = {
+                    "text": text,
+                    "user": user,
+                    "tx_id": tx_id,
+                }
+            send_msg(real_addr, {
+                "type": "pin_sync",
+                "lamport": found_time,
+                "msg_id": new_id(),
+                "addr": [MY_HOST, MY_PORT],
+                "pins": pins_payload,
+            })
         # We forward the *original* ping to propagate it
         forward(msg, exclude=real_addr)
         return
@@ -250,6 +267,17 @@ def handle_msg(msg, tcp_addr):
         with members_lock:
             for r, user_set in synced_members.items():
                 members.setdefault(r, set()).update(user_set)
+        return
+
+    if mtype == "pin_sync":
+        pins = msg.get("pins", {})
+        for room, pdata in pins.items():
+            text = pdata.get("text")
+            user = pdata.get("user")
+            tx_id = pdata.get("tx_id")
+            if text is None or user is None or tx_id is None:
+                continue
+            pinned_messages[room] = (text, user, tx_id)
         return
 
     if mtype == "room_query":
@@ -474,6 +502,13 @@ def commands(user_input):
             with console_lock:
                 print(f"Switched to chatroom: {chatroom_name}")
 
+            # If room has pinned message, show after switching
+            pm = pinned_messages.get(chatroom_name)
+            if pm:
+                text, user, tx_id = pm
+                with console_lock:
+                    print(f"[PINNED in {chatroom_name}] {user}: {text}")
+
             forward({
                 "type": "focus_enter",
                 "msg_id": new_id(),
@@ -668,6 +703,12 @@ def join_chatroom(new_chatroom):
     "ttl": 5,
     "lamport": focus_time, ##& Adds lamport time to the message output ##
 })
+
+    pm = pinned_messages.get(new_chatroom)
+    if pm: 
+        text, user, tx_id = pm
+        with console_lock:
+            print(f"[Pinned in {new_chatroom}] {user}: {text}")
 
 def send_flood(text):
     msg ={

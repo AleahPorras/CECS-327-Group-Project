@@ -24,6 +24,14 @@ room_state_lock = threading.Lock()
 timestamp = 0
 lock_lamport = threading.Lock()
 
+current_tx_id = None
+pinned_messages = {}
+
+chat_history = [] 
+history_lock = threading.Lock() 
+
+
+
 #one global critical section for the whole node
 cs_lock = threading.Lock()
 cs_state = "idle"
@@ -31,7 +39,7 @@ cs_request_ts = None
 cs_pending = set()
 cs_deferred = set()
 
-# ---- Transaction / reservation state ----
+#Transaction /reservation sta
 tx_lock = threading.Lock()
 
 # Local reservation table: station_id -> list of (start, end, username, tx_id)
@@ -44,10 +52,10 @@ reservations = {}
 # }
 transactions = {}
 
-# Current transaction for this peer (one at a time for simplicity)
+# Current transaction for this peer 
 current_tx_id = None
 
-# Pinned messages: room_name -> (text, user, tx_id)
+# Pinned messages
 pinned_messages = {}
 
 # room management
@@ -58,7 +66,7 @@ ready = threading.Event()
 handshake_done = threading.Event() 
 peer_found = threading.Event() 
 
-# each peer keeps a "seen" of message IDs
+# each peer keeps a log of message IDs
 def new_id():
     return str(uuid.uuid4())
 
@@ -247,13 +255,13 @@ def handle_msg(msg, tcp_addr):
                 "addr": [MY_HOST, MY_PORT],
                 "pins": pins_payload,
             })
-        # We forward the *original* ping to propagate it
+        # We forward the original ping 
         forward(msg, exclude=real_addr)
         return
 
     ## Handler functions
     if mtype == "pong":
-        # Pong is also a direct reply, no forward.
+        
         if local_current_room is None or msg_room is None or msg_room == local_current_room:
             
             with console_lock:
@@ -261,7 +269,7 @@ def handle_msg(msg, tcp_addr):
             handshake_done.set()
         return
     
-    # These types are also not forwarded
+    
     if mtype == "member_sync":
         synced_members = msg.get("members",{})
         with members_lock:
@@ -319,9 +327,7 @@ def handle_msg(msg, tcp_addr):
         with members_lock:
             members.setdefault(msg_room, set())
             if msg_user in members[msg_room]:
-                # We already know, but we must *not* send name_taken
-                # because this message might be for another peer.
-                # Just exit silently.
+            
                 return 
             members[msg_room].add(msg_user)
         
@@ -372,12 +378,21 @@ def handle_msg(msg, tcp_addr):
         return
 
     if msg_room is not None and msg_room != local_current_room:
-        return # Not for our active room, and we've already forwarded it.
+        return 
     
     if mtype == "chat":
         
+        # with console_lock:
+        #     print(f"\r[{msg_room}] <Timestamp:{current_time}> {msg_user}: {msg['text']}\n[{local_current_room}]> ", end = "", flush = True)
+
+        msg_formating = f"[{msg_room}] <Timestamp:{current_time}> {msg_user}: {msg['text']}"
+
+        with history_lock:
+            chat_history.append((current_time, msg_formating))
+            chat_history.sort(key=lambda x: x[0]) 
+
         with console_lock:
-            print(f"\r[{msg_room}] <Timestamp:{current_time}> {msg_user}: {msg['text']}\n[{local_current_room}]> ", end = "", flush = True)
+            print(f"\r{msg_formating}\n[{local_current_room}]> ", end = "", flush = True)
         return
 
 # read one TCP and feed all messages on it into handle_msg function
@@ -395,7 +410,7 @@ def listener():
     global MY_PORT
     s = socket.socket()
 
-    # pick the first free port starting at BASE_PORT
+    # pick the first free port 
     for port in range(BASE_PORT, BASE_PORT + MAX_PEERS):
         try:
             s.bind((MY_HOST, port))
@@ -528,7 +543,7 @@ def commands(user_input):
         release_cs()
         return True
 
-    # ---- Transaction commands ----
+    # Transaction commands 
     elif user_input.startswith("tx/begin"):
         begin_transaction()
         return True
@@ -551,7 +566,7 @@ def commands(user_input):
         abort_transaction()
         return True
 
-    # ---- Pin message in current room ----
+    # Pin message in current room
     elif user_input.startswith("d/Pin "):
         text = user_input[len("d/Pin "):].strip()
         if not text:
@@ -652,7 +667,22 @@ def commands(user_input):
             print("     d/CS                      - Requests CS mode")
             print("     d/Done                    - Leaves CS mode")
             print("     d/discoverTopic <topic>   - Input topic you want to send message to, then will input a message to send")
-            print("     d/help                  - Reprint comands\n")
+            print("     d/Pin <message>           - Pin a message in the current room (uses a transaction)")
+            print("     d/help                    - Reprint comands\n")
+
+        
+        return True
+    
+    elif user_input == "d/History":
+        with history_lock:
+           
+            history_copy = list(chat_history)
+            
+        with console_lock:
+            print("\n Chat History (Lamport Time)")
+            for timestamp, line in history_copy:
+                print(f' - {line}')
+           
         return True
     
 
@@ -850,12 +880,11 @@ def handle_cs_reply(msg, real_addr):
                 print ("[CS] All replies received. Entering CS mode.")
 
 def with_global_cs(fn):
-    """
-    Run fn() while holding the distributed critical section (Lamport CS).
-    """
+  
+   
     request_cs()
 
-    # Busy-wait until we are in CS mode
+    # Busywait until we are in CS mode
     while True:
         with cs_lock:
             if cs_state == "in_cs":
@@ -869,7 +898,7 @@ def with_global_cs(fn):
 
 
 def begin_transaction():
-    """Start a new local transaction for the current user."""
+    #Start a new local transaction for the current user
     global current_tx_id
 
     with tx_lock:
@@ -891,7 +920,7 @@ def begin_transaction():
 
 
 def add_reservation_op(station_id, start, end):
-    """Add a reservation operation to the current transaction."""
+    #Add a reservation operation to the current transaction
     global current_tx_id
     with tx_lock:
         if current_tx_id is None:
@@ -909,7 +938,7 @@ def add_reservation_op(station_id, start, end):
         print(f"[TX] Added reserve({station_id}, {start}, {end}) to {current_tx_id}")
 
 def add_pin_op(room_name, text):
-    """Add a pin-message operation to the current transaction."""
+    #Add a pin message operation to the current transaction
     global current_tx_id
     with tx_lock:
         if current_tx_id is None:
@@ -927,18 +956,12 @@ def add_pin_op(room_name, text):
         print(f"[TX] Added pin({room_name}, {text!r}) to {current_tx_id}")
 
 def times_overlap(start1, end1, start2, end2):
-    """
-    Simple interval overlap check.
-    For the project you can keep start/end as strings that compare lexicographically.
-    """
+   
     return not (end1 <= start2 or end2 <= start1)
 
 
 def validate_transaction(tx_id, tx):
-    """
-    Ensure there are no conflicting reservations (no double booking).
-    We only validate 'reserve' ops; other kinds (e.g. 'pin') are ignored here.
-    """
+
     ops = tx["ops"]
 
     for op in ops:
@@ -959,7 +982,7 @@ def validate_transaction(tx_id, tx):
     return True
 
 def apply_transaction(tx_id, tx):
-    """Apply all operations in a committed transaction (reservations, pins, etc.)."""
+    #Apply all operations in a committed transaction 
     ops = tx["ops"]
     user = tx["user"]
     for op in ops:
@@ -987,7 +1010,7 @@ def apply_transaction(tx_id, tx):
                     )
 
 def broadcast_tx_commit(tx_id, tx):
-    """Broadcast a commit message so all peers apply the transaction."""
+    # Broadcast a commit message so all peers apply the transaction
     found_time = increment_timestamp()
     msg = {
         "type": "tx_commit",
@@ -1003,7 +1026,7 @@ def broadcast_tx_commit(tx_id, tx):
 
 
 def broadcast_tx_abort(tx_id, tx):
-    """Broadcast an abort message so all peers roll back the transaction."""
+    #Broadcast an abort message so all peers roll back the transaction
     found_time = increment_timestamp()
     msg = {
         "type": "tx_abort",
@@ -1018,7 +1041,7 @@ def broadcast_tx_abort(tx_id, tx):
 
 
 def commit_transaction():
-    """Commit the current transaction using the global CS for atomicity."""
+    #Commit the current transaction using the global CS for atomicity
     global current_tx_id
     with tx_lock:
         if current_tx_id is None:
@@ -1062,7 +1085,7 @@ def commit_transaction():
 
 
 def abort_transaction():
-    """Abort the current transaction explicitly."""
+    #Abort the current transaction explicitly
     global current_tx_id
     with tx_lock:
         if current_tx_id is None:
@@ -1087,7 +1110,7 @@ def abort_transaction():
 
 
 def handle_tx_commit(msg, real_addr):
-    """Handle a tx_commit message from another peer."""
+    #Handle a tx_commit message from another peer
     tx_id = msg.get("tx_id")
     user = msg.get("user")
     ops = msg.get("ops", [])
@@ -1108,7 +1131,7 @@ def handle_tx_commit(msg, real_addr):
 
 
 def handle_tx_abort(msg, real_addr):
-    """Handle a tx_abort message from another peer."""
+    #Handle a tx_abort message from another peer
     tx_id = msg.get("tx_id")
     user = msg.get("user")
 

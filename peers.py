@@ -551,7 +551,7 @@ def commands(user_input):
         abort_transaction()
         return True
 
-    # ---- High-level text feature: pin message in current room ----
+    # ---- Pin message in current room ----
     elif user_input.startswith("d/Pin "):
         text = user_input[len("d/Pin "):].strip()
         if not text:
@@ -1199,7 +1199,14 @@ def main():
     true_chatroom = room_checker(room)
     join_chatroom(true_chatroom)
 
-
+    with console_lock:
+        print("")
+        print("████████╗██╗░░██╗██╗░██████╗░█████╗░░█████╗░██████╗░██████╗░")
+        print("╚══██╔══╝██║░░██║██║██╔════╝██╔══██╗██╔══██╗██╔══██╗██╔══██╗")
+        print("░░░██║░░░███████║██║╚█████╗░██║░░╚═╝██║░░██║██████╔╝██║░░██║")
+        print("░░░██║░░░██╔══██║██║░╚═══██╗██║░░██╗██║░░██║██╔══██╗██║░░██║")
+        print("░░░██║░░░██║░░██║██║██████╔╝╚█████╔╝╚█████╔╝██║░░██║██████╔╝")
+        print("░░░╚═╝░░░╚═╝░░╚═╝╚═╝╚═════╝░░╚════╝░░╚════╝░╚═╝░░╚═╝╚═════╝░")
     with console_lock:
         print("\nAvailable commands:")
         print("     d/Join <chatroom>         - Joins a new chatroom")

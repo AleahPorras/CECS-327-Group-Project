@@ -543,29 +543,6 @@ def commands(user_input):
         release_cs()
         return True
 
-    # Transaction commands 
-    elif user_input.startswith("tx/begin"):
-        begin_transaction()
-        return True
-
-    elif user_input.startswith("tx/reserve "):
-        parts = user_input.split()
-        if len(parts) != 4:
-            with console_lock:
-                print("Usage: tx/reserve <station_id> <start> <end>")
-            return True
-        station_id, start, end = parts[1], parts[2], parts[3]
-        add_reservation_op(station_id, start, end)
-        return True
-
-    elif user_input.startswith("tx/commit"):
-        commit_transaction()
-        return True
-
-    elif user_input.startswith("tx/abort"):
-        abort_transaction()
-        return True
-
     # Pin message in current room
     elif user_input.startswith("d/Pin "):
         text = user_input[len("d/Pin "):].strip()

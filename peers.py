@@ -700,27 +700,29 @@ def commands(user_input):
         forward(msg)
         return True
     
-    elif user_input.startswith("d/discoverRoom "):
-        room = " ".join(user_input[len("d/discoverRoom "):].lower().split())
+    # elif user_input.startswith("d/discoverRoom "):
+    #     room = " ".join(user_input[len("d/discoverRoom "):].lower().split())
 
-        with console_lock:
-            txt = input("Enter your message: ")
-        found_time = increment_timestamp()
-        msg = {
-                "type": "discoverRoom",
-                "room": room,
-                "msg_id": new_id(),
-                "user": username,
-                "text": txt,
-                "addr": [MY_HOST, MY_PORT],
-                "ttl": 5,
-                "lamport": found_time,
-            }
-        forward(msg)
-        return True
+    #     with console_lock:
+    #         txt = input("Enter your message: ")
+    #     found_time = increment_timestamp()
+    #     msg = {
+    #             "type": "discoverRoom",
+    #             "room": room,
+    #             "msg_id": new_id(),
+    #             "user": username,
+    #             "text": txt,
+    #             "addr": [MY_HOST, MY_PORT],
+    #             "ttl": 5,
+    #             "lamport": found_time,
+    #         }
+    #     forward(msg)
+    #     return True
     
+    # User wants to see the commands again 
     elif user_input.startswith("d/Help"): 
 
+        #re print of commands
         with console_lock:
             print("\nAvailable commands:")
             print("     d/Join <chatroom>         - Joins a new chatroom")
@@ -737,12 +739,14 @@ def commands(user_input):
         
         return True
     
+    #When ou want to see the messages they recivied (making sure lamport timestamps are goopd and ordering is correct)
     elif user_input == "d/History":
         with history_lock:
-           
+           #getting the history  
             history_copy = list(chat_history)
             
         with console_lock:
+            #printing out each message with their timestamp  (also displays the room)
             print("\n Chat History (Lamport Time)")
             for timestamp, line in history_copy:
                 print(f' - {line}')
@@ -752,28 +756,34 @@ def commands(user_input):
 
     return False
 
+#joining a new room
 def join_chatroom(new_chatroom):
     global current_chatroom
 
     send_join_msg = False
     with members_lock:
         members.setdefault(new_chatroom, set())
+        #if user is not in the room yet
         if username not in members[new_chatroom]:
+            #adds them to the room
             members[new_chatroom].add(username)
             send_join_msg = True
         else:
-
+            #so user can't join a group they are already in (join message remains false )
             with console_lock:
                 print(f"You are listed as a member of {new_chatroom}.")
 
 
     with room_state_lock:
+        #adding this chat room to the users list
         current_chatrooms.add(new_chatroom)
+        #making them currently active in the room they joined (automatically puts them in that room when they join )
         current_chatroom = new_chatroom
 
     with rooms_lock:
         all_rooms.add(new_chatroom)
 
+    #message that will be sent when someone joins a new room (sends to the members of that room that they joined to let them know someone else is now there )
     if send_join_msg:
         join_time = increment_timestamp()
         join_msg = {
@@ -785,6 +795,7 @@ def join_chatroom(new_chatroom):
             "ttl": 5,
             "lamport": join_time, ##& Adds lamport time to the message output ##
         }
+        #forwarding
         forward(join_msg)
 
     focus_time = increment_timestamp()
@@ -798,12 +809,14 @@ def join_chatroom(new_chatroom):
     "lamport": focus_time, ##& Adds lamport time to the message output ##
 })
 
-    pm = pinned_messages.get(new_chatroom)
-    if pm: 
-        text, user, tx_id = pm
+    #for displaying the pinned message (if a chat has one)
+    pinned_message = pinned_messages.get(new_chatroom)
+    if pinned_message: 
+        text, user, tx_id = pinned_message
         with console_lock:
             print(f"[Pinned in {new_chatroom}] {user}: {text}")
 
+#function for 
 def send_flood(text):
     msg ={
         "type": "flood",
@@ -826,15 +839,19 @@ def send_flood(text):
     
 ##& gets logical clock value for sent messages ##
 def increment_timestamp():
+    #getting the timestamp
     global timestamp
     with lock_lamport:
+        #increment the timestamp by 1
         timestamp += 1
         return timestamp
 
 ##& Updates the current clock time ##
 def updating_lamport_time(current_time):
+    #getting the timestamp (global)
     global timestamp
     with lock_lamport:
+        #comparing the global timestamp to the one attached to the process that send the message sees which oe is larger, incrmeents by 1
         timestamp = max(timestamp, current_time) + 1 # increments the max lamport time each time a new message is sent
         return timestamp
 
@@ -1274,7 +1291,7 @@ def main():
     ready.wait()
 
     with console_lock:
-         
+        #cuteeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
         print("")
         print("████████╗██╗░░██╗██╗░██████╗░█████╗░░█████╗░██████╗░██████╗░")
         print("╚══██╔══╝██║░░██║██║██╔════╝██╔══██╗██╔══██╗██╔══██╗██╔══██╗")
@@ -1283,6 +1300,7 @@ def main():
         print("░░░██║░░░██║░░██║██║██████╔╝╚█████╔╝╚█████╔╝██║░░██║██████╔╝")
         print("░░░╚═╝░░░╚═╝░░╚═╝╚═╝╚═════╝░░╚════╝░░╚════╝░╚═╝░░╚═╝╚═════╝░ ©")
         print("")
+        #asks for username, does a random one if one isn't inputed 
         username = input("Enter your username: ").strip() or f"user{uuid.uuid4().hex[:4]}"
     
     if MY_PORT != BASE_PORT:
@@ -1313,6 +1331,7 @@ def main():
                     print("[bootstrap] No peers found, trying again.")
                 time.sleep(5)
     
+    #When a user name is already taken, makes sure the user doesnt continute without pickign a new 
     while username_check(username):
         with console_lock:
             print(f"[SYSTEM] Username '{username}' is already taken. Please choose another.")
@@ -1331,8 +1350,10 @@ def main():
         # print("░░░██║░░░██║░░██║██║██████╔╝╚█████╔╝╚█████╔╝██║░░██║██████╔╝")
         # print("░░░╚═╝░░░╚═╝░░╚═╝╚═╝╚═════╝░░╚════╝░░╚════╝░╚═╝░░╚═╝╚═════╝░ ©")
         print("\nQuerying network for available rooms...")
+    #getting rooms that currently have members
     available_rooms = query_rooms()
     
+    #prints rooms if there are some 
     if available_rooms:
         with console_lock:
             print("\nAvailable rooms:")
@@ -1340,20 +1361,26 @@ def main():
             with members_lock:
                 member_count = len(members.get(r, set()))
             print(f"  {idx}. {r} ({member_count} members)")
+    #me4asn there are currently no rooms that the user can join, but they can create a new one 
     else:
         with console_lock:
             print("No rooms found. Create one!")
-        
+    
+    #user can enter what room they want to join or what room they want to create (if room doens't exist it creates it )
     room = input("\nEnter room name: ").strip() or "lobby"
+    #incase user makes a spelling mistake they don't have to rerun the program
     answer = input(f"Is this the room you want to join? Check spellling. (y/n): ")
+    #the reenter in case the user wants to be in a diff room they originall inputted 
     while answer.lower()== 'n' or answer.lower() == 'no': 
         room = input("\nEnter room name: ").strip() or "lobby"
         answer = input(f"Is this the room you want to join? Check spellling. (y/n): ")
 
     
     true_chatroom = room_checker(room)
+    #join the room they want to enter 
     join_chatroom(true_chatroom)
 
+    #print the list of commands they can use
     with console_lock:
         print("\nAvailable commands:")
         print("     d/Join <chatroom>         - Joins a new chatroom")
@@ -1371,7 +1398,7 @@ def main():
 
     while True:
         try:
-
+            #the room they want to write to 
             with room_state_lock:
                     prompt_room = current_chatroom
                 
@@ -1380,12 +1407,14 @@ def main():
 
             if not text:
                 continue
-
+            
+            #means the user wants to leave 
             if text.lower() in ("exit", "quit"):
 
                 with room_state_lock:
                     chatrooms_copy = set(current_chatrooms)
                 
+                #sends a leave message to every room they were in, and "leave means they will be removed from the memeber list 
                 for room in chatrooms_copy:
                     found_time = increment_timestamp()
                     leave_msg = {
@@ -1399,6 +1428,7 @@ def main():
                     }
                     forward(leave_msg)
 
+                #prints to the user that they are being exitied 
                 with console_lock:
                     print("exiting...")
                 break
@@ -1424,6 +1454,7 @@ def main():
             }
             forward(msg)
 
+        #when user does ctrl c on the keyboared to forcefully exit the chat 
         except KeyboardInterrupt:
             
             with room_state_lock:

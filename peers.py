@@ -75,11 +75,26 @@ def send_msg(addr, obj):
     h, p = addr
     try:
         s = socket.socket()
+        s.settimeout(2.0)
         s.connect((h, p))
         s.sendall((json.dumps(obj) + "\n").encode())
         s.close()
-    except OSError:
-        pass
+    except (OSError, ConnectionRefusedError, TimeoutError):
+       
+        global neighbors, cs_pending, cs_state
+        with neighbors_lock:
+            neighbors.discard(addr)
+        with cs_lock:
+            
+            if cs_state == "requesting" and addr in cs_pending:
+                with console_lock:
+                    print(f"\n[System] Peer {addr} failed. Removing vote.")
+                cs_pending.discard(addr)
+                
+                if not cs_pending:
+                    cs_state = "in_cs"
+                    with console_lock:
+                        print("[CS] Entered CS (last voter failed).")
 
 # connects peers to already existing peers
 def network(port):
@@ -183,6 +198,8 @@ def handle_msg(msg, tcp_addr):
         if mid in seen:
             return
         seen.add(mid)
+        if len(seen) > 100000:
+            seen.pop()
 
     mtype    = msg.get("type")
 
@@ -641,10 +658,10 @@ def commands(user_input):
             print("     d/Switch <chatroom>       - Switches to a different chatroom")
             print("     d/Rooms                   - Lists your current chatrooms")
             print("     d/Flood <message>         - Sends a message to everyone and every room")
-            print("     d/CS                      - Requests CS mode")
-            print("     d/Done                    - Leaves CS mode")
             print("     d/discoverTopic <topic>   - Input topic you want to send message to, then will input a message to send")
             print("     d/Pin <message>           - Pin a message in the current room (uses a transaction)")
+            print("     d/CS                      - Requests CS mode")
+            print("     d/Done                    - Leaves CS mode")
             print("     d/help                    - Reprint comands\n")
 
         
@@ -857,6 +874,7 @@ def handle_cs_reply(msg, real_addr):
                 print ("[CS] All replies received. Entering CS mode.")
 
 def with_global_cs(fn):
+    global cs_state, cs_pending
   
    
     request_cs()
@@ -866,8 +884,28 @@ def with_global_cs(fn):
         with cs_lock:
             if cs_state == "in_cs":
                 break
-        time.sleep(0.05)
+            current_pending = list(cs_pending)
+        # time.sleep(0.05)
+    for node in current_pending:
+            try:
+                
+                s = socket.socket()
+                s.settimeout(1.0) 
+                s.connect(node)
+                s.close()
+            except (OSError, ConnectionRefusedError, TimeoutError):
+               
+                with neighbors_lock:
+                    neighbors.discard(node)
+                with cs_lock:
+                     if node in cs_pending:
+                         print(f"[System] Node {node} detected dead during wait.")
+                         cs_pending.discard(node)
+                        
+                         if not cs_pending:
+                             cs_state = "in_cs"
 
+    time.sleep(1.0) 
     try:
         fn()
     finally:
@@ -945,16 +983,30 @@ def validate_transaction(tx_id, tx):
         if not op:
             continue
         kind = op[0]
-        if kind != "reserve":
-            continue
+       
+        if kind == "reserve":
+            _, station_id, start, end = op
+            existing = reservations.get(station_id, [])
+            for (s, e, u, other_tx) in existing:
+                if times_overlap(start, end, s, e) and other_tx != tx_id:
+                    return False
 
-        # Now we know it's a reserve op: ("reserve", station_id, start, end)
-        _, station_id, start, end = op
-        existing = reservations.get(station_id, [])
-        for (s, e, u, other_tx) in existing:
-            # If time windows overlap and it's not the same transaction, it's a conflict
-            if times_overlap(start, end, s, e) and other_tx != tx_id:
-                return False
+        
+        elif kind == "pin":
+            _, room_name, text = op
+            if room_name in pinned_messages:
+                existing_text, existing_user, existing_tx_id = pinned_messages[room_name]
+                if existing_tx_id != tx_id:
+                     return False
+
+
+        # # Now we know it's a reserve op: ("reserve", station_id, start, end)
+        # _, station_id, start, end = op
+        # existing = reservations.get(station_id, [])
+        # for (s, e, u, other_tx) in existing:
+        #     # If time windows overlap and it's not the same transaction, it's a conflict
+        #     if times_overlap(start, end, s, e) and other_tx != tx_id:
+        #         return False
 
     return True
 
@@ -1103,8 +1155,25 @@ def handle_tx_commit(msg, real_addr):
         tx["status"] = "committed"
         apply_transaction(tx_id, tx)
 
-    with console_lock:
-        print(f"\r[TX] Commit received for {tx_id} (user={user}). Reservations applied.\n> ", end="", flush=True)
+    
+    should_print = False
+    with room_state_lock:
+        my_room = current_chatroom
+    
+  
+    if user == username:
+        should_print = True
+    else:
+        for op in ops:
+           
+            if op[0] == "pin" and op[1] == my_room:
+                should_print = True
+                break
+            
+
+    if should_print:
+        with console_lock:
+            print(f"\r[TX] Commit received for {tx_id} (user={user}). Data updated.\n[{my_room}]> ", end="", flush=True)
 
 
 def handle_tx_abort(msg, real_addr):
@@ -1135,6 +1204,15 @@ def main():
     ready.wait()
 
     with console_lock:
+         
+        print("")
+        print("████████╗██╗░░██╗██╗░██████╗░█████╗░░█████╗░██████╗░██████╗░")
+        print("╚══██╔══╝██║░░██║██║██╔════╝██╔══██╗██╔══██╗██╔══██╗██╔══██╗")
+        print("░░░██║░░░███████║██║╚█████╗░██║░░╚═╝██║░░██║██████╔╝██║░░██║")
+        print("░░░██║░░░██╔══██║██║░╚═══██╗██║░░██╗██║░░██║██╔══██╗██║░░██║")
+        print("░░░██║░░░██║░░██║██║██████╔╝╚█████╔╝╚█████╔╝██║░░██║██████╔╝")
+        print("░░░╚═╝░░░╚═╝░░╚═╝╚═╝╚═════╝░░╚════╝░░╚════╝░╚═╝░░╚═╝╚═════╝░ ©")
+        print("")
         username = input("Enter your username: ").strip() or f"user{uuid.uuid4().hex[:4]}"
     
     if MY_PORT != BASE_PORT:
@@ -1175,6 +1253,13 @@ def main():
                 username = f"user{uuid.uuid4().hex[:4]}"
     
     with console_lock:
+        # print("")
+        # print("████████╗██╗░░██╗██╗░██████╗░█████╗░░█████╗░██████╗░██████╗░")
+        # print("╚══██╔══╝██║░░██║██║██╔════╝██╔══██╗██╔══██╗██╔══██╗██╔══██╗")
+        # print("░░░██║░░░███████║██║╚█████╗░██║░░╚═╝██║░░██║██████╔╝██║░░██║")
+        # print("░░░██║░░░██╔══██║██║░╚═══██╗██║░░██╗██║░░██║██╔══██╗██║░░██║")
+        # print("░░░██║░░░██║░░██║██║██████╔╝╚█████╔╝╚█████╔╝██║░░██║██████╔╝")
+        # print("░░░╚═╝░░░╚═╝░░╚═╝╚═╝╚═════╝░░╚════╝░░╚════╝░╚═╝░░╚═╝╚═════╝░ ©")
         print("\nQuerying network for available rooms...")
     available_rooms = query_rooms()
     
@@ -1200,24 +1285,16 @@ def main():
     join_chatroom(true_chatroom)
 
     with console_lock:
-        print("")
-        print("████████╗██╗░░██╗██╗░██████╗░█████╗░░█████╗░██████╗░██████╗░")
-        print("╚══██╔══╝██║░░██║██║██╔════╝██╔══██╗██╔══██╗██╔══██╗██╔══██╗")
-        print("░░░██║░░░███████║██║╚█████╗░██║░░╚═╝██║░░██║██████╔╝██║░░██║")
-        print("░░░██║░░░██╔══██║██║░╚═══██╗██║░░██╗██║░░██║██╔══██╗██║░░██║")
-        print("░░░██║░░░██║░░██║██║██████╔╝╚█████╔╝╚█████╔╝██║░░██║██████╔╝")
-        print("░░░╚═╝░░░╚═╝░░╚═╝╚═╝╚═════╝░░╚════╝░░╚════╝░╚═╝░░╚═╝╚═════╝░ ©")
-    with console_lock:
         print("\nAvailable commands:")
         print("     d/Join <chatroom>         - Joins a new chatroom")
         print("     d/Switch <chatroom>       - Switches to a different chatroom")
         print("     d/Rooms                   - Lists your current chatrooms")
         print("     d/Flood <message>         - Sends a message to everyone and every room")
+        print("     d/discoverTopic <topic>   - Input topic you want to send message to, then will input a message to send")
         print("     d/CS                      - Requests CS mode")
         print("     d/Done                    - Leaves CS mode")
-        print("     d/discoverTopic <topic>   - Input topic you want to send message to, then will input a message to send")
         print("     d/Pin <message>           - Pin a message in the current room (uses a transaction)")
-        print("     d/help                  - Reprint comands\n")
+        print("     d/help                    - Reprint comands\n")
         
 
 

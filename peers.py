@@ -650,7 +650,7 @@ def commands(user_input):
         forward(msg)
         return True
     
-    elif user_input.startswith("d/help"): 
+    elif user_input.startswith("d/Help"): 
 
         with console_lock:
             print("\nAvailable commands:")
@@ -662,7 +662,8 @@ def commands(user_input):
             print("     d/Pin <message>           - Pin a message in the current room (uses a transaction)")
             print("     d/CS                      - Requests CS mode")
             print("     d/Done                    - Leaves CS mode")
-            print("     d/help                    - Reprint comands\n")
+            print("     d/History                 - Shows history of received messages (mostly for testing ti view ordering)")  
+            print("     d/Help                    - Reprint comands\n")
 
         
         return True
@@ -1294,7 +1295,8 @@ def main():
         print("     d/CS                      - Requests CS mode")
         print("     d/Done                    - Leaves CS mode")
         print("     d/Pin <message>           - Pin a message in the current room (uses a transaction)")
-        print("     d/help                    - Reprint comands\n")
+        print("     d/History                 - Shows history of received messages (mostly for testing ti view ordering)")  
+        print("     d/Help                    - Reprint comands\n")
         
 
 

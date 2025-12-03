@@ -9,14 +9,20 @@ MY_PORT = None
 # peer state
 neighbors = set()
 neighbors_lock = threading.Lock()
+
 seen = set()
 seen_lock = threading.Lock()
+
 username = None # stores peer's username
+
 current_chatroom = None
 current_chatrooms = set()
+
 members = {}
 members_lock = threading.Lock()
+
 subscriptions = set() # for fooding
+
 console_lock = threading.Lock()
 room_state_lock = threading.Lock()
 
@@ -24,7 +30,7 @@ room_state_lock = threading.Lock()
 timestamp = 0
 lock_lamport = threading.Lock()
 
-current_tx_id = None
+current_transaction_id = None
 pinned_messages = {}
 
 chat_history = [] 
@@ -33,27 +39,23 @@ history_lock = threading.Lock()
 
 
 #one global critical section for the whole node
-cs_lock = threading.Lock()
-cs_state = "idle"
-cs_request_ts = None
-cs_pending = set()
-cs_deferred = set()
+critical_section_lock = threading.Lock()
+critical_section_state = "idle"
+critical_section_request_ts = None
+critical_section_pending = set()
+critical_section_deferred = set()
 
 #Transaction /reservation sta
-tx_lock = threading.Lock()
+transaction_lock = threading.Lock()
 
 # Local reservation table: station_id -> list of (start, end, username, tx_id)
 reservations = {}
 
-# Active transactions: tx_id -> {
-#   "user": str,
-#   "ops": list of pending operations,
-#   "status": "active"|"prepared"|"committed"|"aborted"
-# }
+#empy set to keep track of transactions
 transactions = {}
 
 # Current transaction for this peer 
-current_tx_id = None
+current_transaction_id = None
 
 # Pinned messages
 pinned_messages = {}
@@ -72,27 +74,40 @@ def new_id():
 
 # open TCP socket , send message and close
 def send_msg(addr, obj):
+    #host and port rettreive 
     h, p = addr
     try:
+
+        #creating the TCP socket and connectiong peers
         s = socket.socket()
         s.settimeout(2.0)
         s.connect((h, p))
         s.sendall((json.dumps(obj) + "\n").encode())
         s.close()
+
+    #Handles errors during connection
     except (OSError, ConnectionRefusedError, TimeoutError):
        
-        global neighbors, cs_pending, cs_state
+        global neighbors, critical_section_pending, critical_section_state
+
+        #we are assuming that the peer is dead and needs to be removed, removed the peer at the address that had the issue
         with neighbors_lock:
             neighbors.discard(addr)
-        with cs_lock:
+
+        with critical_section_lock:
             
-            if cs_state == "requesting" and addr in cs_pending:
+            #incase the criticle section is stock with a dead peer
+            if critical_section_state == "requesting" and addr in critical_section_pending:
+                
+                #stating that there is a dead peer and that they must be removed from being able to vote
                 with console_lock:
                     print(f"\n[System] Peer {addr} failed. Removing vote.")
-                cs_pending.discard(addr)
+                #then discarding that peer from the vote
+                critical_section_pending.discard(addr)
                 
-                if not cs_pending:
-                    cs_state = "in_cs"
+                if not critical_section_pending:
+                    critical_section_state = "in_cs"
+
                     with console_lock:
                         print("[CS] Entered CS (last voter failed).")
 
@@ -163,6 +178,7 @@ def bootstrap():
 
 # flood a message to all neighbors except the one you know
 def forward(msg, exclude =None):
+    #ttl = time to live
     ttl = msg.get("ttl", 0)
     if ttl <= 0:
         return
@@ -177,14 +193,18 @@ def forward(msg, exclude =None):
 
 def handle_msg(msg, tcp_addr):
 
-    # ##& incorporates new lamport clock times##
+    ###& incorporates new lamport clock times##
     current_time = msg.get("lamport", 0)
+    #since we are receiving a message we use the updating lamport time function (not incrememnt)
     updating_lamport_time(current_time)
 
+
     with room_state_lock:
+        #sets to temp variables (so we don't have to put the whole thing in a whole lock)
         local_current_room = current_chatroom
         local_current_rooms = set(current_chatrooms) # make a copy
     
+    #accessing global variables 
     global neighbors, members
 
     real_addr = tuple(msg.get("addr", tcp_addr))
@@ -193,25 +213,29 @@ def handle_msg(msg, tcp_addr):
             neighbors.add(real_addr)
 
     # drop duplicates
-    mid = msg.get("msg_id")
+    message_id = msg.get("msg_id")
     with seen_lock: 
-        if mid in seen:
+        if message_id in seen:
             return
-        seen.add(mid)
+        seen.add(message_id)
+        #makes sure to clear if there are too many in the set
         if len(seen) > 100000:
             seen.pop()
 
-    mtype    = msg.get("type")
+    mtype = msg.get("type")
 
     if mtype == "cs_request":
         handle_cs_request(msg, real_addr)
         return
+    
     if mtype == "cs_reply":
         handle_cs_reply(msg, real_addr)
         return
+    
     if mtype == "tx_commit":
         handle_tx_commit(msg, real_addr)
         return
+    
     if mtype == "tx_abort":
         handle_tx_abort(msg, real_addr)
         return
@@ -255,7 +279,7 @@ def handle_msg(msg, tcp_addr):
                     "rooms": list(all_rooms),
                     "ttl": 3,
                 })
-        # Sends pinned messages on ping (so newcomers can view existing pings)
+        # Sends pinned messages on ping (so new users can view existing pinned messages)
         if pinned_messages:
             found_time = increment_timestamp()
             pins_payload = {}
@@ -286,7 +310,7 @@ def handle_msg(msg, tcp_addr):
             handshake_done.set()
         return
     
-    
+    #updating members 
     if mtype == "member_sync":
         synced_members = msg.get("members",{})
         with members_lock:
@@ -296,15 +320,23 @@ def handle_msg(msg, tcp_addr):
 
     if mtype == "pin_sync":
         pins = msg.get("pins", {})
-        for room, pdata in pins.items():
-            text = pdata.get("text")
-            user = pdata.get("user")
-            tx_id = pdata.get("tx_id")
+        for room, pinned_message_data in pins.items():
+            #text that is with the pinned message
+            text = pinned_message_data.get("text")
+
+            #who pinned the message
+            user = pinned_message_data.get("user")
+
+            #the transaction ID with the pinned message
+            tx_id = pinned_message_data.get("tx_id")
             if text is None or user is None or tx_id is None:
                 continue
+
+            #pinned message for a specific room update 
             pinned_messages[room] = (text, user, tx_id)
         return
 
+    #for getting the diffrent rooms 
     if mtype == "room_query":
         with rooms_lock:
             found_time = increment_timestamp()
@@ -317,6 +349,7 @@ def handle_msg(msg, tcp_addr):
             })
         return
     
+    #fetching rooms (used in if statement above )
     if mtype == "room_response":
         rooms = msg.get("rooms", [])
         with rooms_lock:
@@ -332,6 +365,7 @@ def handle_msg(msg, tcp_addr):
                 all_rooms.add(r)
         return
     
+    #For when you want to send a message to all rooms
     if mtype == "flood":
         src = msg.get("user", "?")
         text = msg.get("text", "")
@@ -340,6 +374,7 @@ def handle_msg(msg, tcp_addr):
             print(f"\r[FLOOD] <Timestamp:{current_time}> {src}: {text}\n[{local_current_room}]> ", end="", flush=True)
         return
 
+    #For when you want to join a new room
     if mtype == "join":
         with members_lock:
             members.setdefault(msg_room, set())
@@ -356,7 +391,8 @@ def handle_msg(msg, tcp_addr):
         with rooms_lock:
             all_rooms.add(msg_room)
         return 
-
+    
+    #For when you want to leave a room
     if mtype == "leave":
         user_was_in_room = False
         with members_lock:
@@ -370,6 +406,7 @@ def handle_msg(msg, tcp_addr):
                 print(f"\r<Timestamp:{current_time}> {msg_user} left {msg_room}\n> ", end = "", flush = True)
         return 
 
+    #for when a message is being set to rooms with a specific word or phrase in their room name
     if mtype == "discoverTopic": 
         topic_name = msg.get("topic", "")
         for chatroom in local_current_rooms:
@@ -402,14 +439,18 @@ def handle_msg(msg, tcp_addr):
         # with console_lock:
         #     print(f"\r[{msg_room}] <Timestamp:{current_time}> {msg_user}: {msg['text']}\n[{local_current_room}]> ", end = "", flush = True)
 
-        msg_formating = f"[{msg_room}] <Timestamp:{current_time}> {msg_user}: {msg['text']}"
+        #make it easy to pass the standered message to the history 
+        message_text = f"[{msg_room}] <Timestamp:{current_time}> {msg_user}: {msg['text']}"
 
         with history_lock:
-            chat_history.append((current_time, msg_formating))
+            #takes the message the the lamport timestamp
+            chat_history.append((current_time, message_text))
+            #re orders the history log
             chat_history.sort(key=lambda x: x[0]) 
 
         with console_lock:
-            print(f"\r{msg_formating}\n[{local_current_room}]> ", end = "", flush = True)
+            #prints like normal to the terminal
+            print(f"\r{message_text}\n[{local_current_room}]> ", end = "", flush = True)
         return
 
 # read one TCP and feed all messages on it into handle_msg function
@@ -446,6 +487,7 @@ def listener():
         c, a = s.accept() # loop so peer is always reachable
         threading.Thread(target=handle_conn, args=(c, a), daemon=True).start()
 
+#Function that will be used for gettin the list of rooms (will be printed to terminal )
 def query_rooms():
     found_time = increment_timestamp()
     msg = {
@@ -461,8 +503,8 @@ def query_rooms():
     with rooms_lock:
         return list(all_rooms)
     
+#used to find which room the user is currently in
 def room_checker(chatroom_name):
-
     name = " ".join(chatroom_name.lower().split())
 
     with rooms_lock:
@@ -474,6 +516,7 @@ def room_checker(chatroom_name):
         
     return chatroom_name
 
+#used to see if we already have a user with a name that is being requested by a new user
 def username_check(username):
     with members_lock:
         all_users = set().union(*members.values())
@@ -484,10 +527,13 @@ def username_check(username):
 
 # Commands that allow a user to manage which rooms they are currently in
 def commands(user_input):
+    #User command to join a new room
     if user_input.startswith("d/Join "):
+        #getting the room the user wanted to join
         chatroom_name = user_input[len("d/Join "):].strip()
         # join_chatroom(chatroom_name)
         if not chatroom_name:
+            #when trying to use the command but not providing a room
             with console_lock:
                 print("Usage: d/Join <chatroom name>")
             return True
@@ -496,6 +542,7 @@ def commands(user_input):
         join_chatroom(true_chatroom)
         return True
     
+    #Command to swtich to a diff room when in a room
     elif user_input.startswith("d/Switch "):
         chatroom_name = user_input[len("d/Switch "):].strip()
         global current_chatroom
@@ -506,11 +553,11 @@ def commands(user_input):
         
         with room_state_lock:
             if chatroom_name not in current_chatrooms:
-
+                #when a user tries to wtich to a room without joining it first 
                 with console_lock:
                     print(f"You are not a member of {chatroom_name}.")
             elif current_chatroom == chatroom_name:
-
+                #trying to switch to a room they are already in 
                 with console_lock:
                     print(f"Already active in {chatroom_name}.")
             else:
@@ -552,17 +599,22 @@ def commands(user_input):
             })
         return True
 
+    #User wants to enter criticle section
     elif user_input.startswith("d/CS"):
         request_cs ()
         return True
 
+    #User no longer wants to be in criticle section
     elif user_input.startswith("d/Done"):
+        #releases the criticle section for other users 
         release_cs()
         return True
 
     # Pin message in current room
     elif user_input.startswith("d/Pin "):
+        #sep the command from the message they want pinned
         text = user_input[len("d/Pin "):].strip()
+        #trying to pin with no text provided 
         if not text:
             with console_lock:
                 print("Usage: d/Pin <message text>")
@@ -571,17 +623,23 @@ def commands(user_input):
         with room_state_lock:
             room = current_chatroom
         if not room:
+            #trying to pin a messge when not in a room yet (not possible but just in case)
             with console_lock:
                 print("You must be in a room to pin a message.")
             return True
 
         # Run a single-operation transaction for this pin
+        #starting transaction
         begin_transaction()
+        #adding the pin to a room
         add_pin_op(room, text)
+        #sending transaction
         commit_transaction()
         return True
 
+    #for when a user wants to send a message to all rooms (reach all nodes they can)
     elif user_input.startswith("d/Flood "):
+        #sep command from message to be flooded 
         txt = user_input[len("d/Flood "):].strip()
         if not txt:
 
@@ -590,31 +648,42 @@ def commands(user_input):
             return True
         send_flood(txt)
 
+        #success
         with console_lock:
             print("Global flood sent")
         return True
 
+    #to get the list of rooms a user is in 
     elif user_input == "d/Rooms":
 
         with room_state_lock:
+            #gets what rooms they are in 
             local_chatrooms = list(current_chatrooms)
+            #which room they are currently in 
             local_active_room = current_chatroom
 
+        #keeps track of how many members are in each
         room_counts = {}
         with members_lock:
+            #going through each of the rooms the user is in 
             for chatroom in local_chatrooms:
+                #how many members are in 1 room
                 room_counts[chatroom] = len(members.get(chatroom, set()))
 
         with console_lock:
+            #displying findings to user 
             print("Your active chatrooms:")
             for chatroom in local_chatrooms:
                 num = room_counts[chatroom]
                 print(f"    - {chatroom} : ({num} members){'  (active)' if chatroom == local_active_room else ''}")
         return True
 
+    #when you want to send a message to a specific topic such as rooms with the work Animal
     elif user_input.startswith("d/discoverTopic "):
+        #sep the command from the users topic
         topic = " ".join(user_input[len("d/discoverTopic "):].lower().split())
 
+        #Then asks for the user to enter a message they want to send 
         with console_lock:
             txt = input("Enter your message: ")
         found_time = increment_timestamp()
@@ -770,52 +839,52 @@ def updating_lamport_time(current_time):
         return timestamp
 
 def request_cs():
-    global cs_state, cs_request_ts, cs_pending
+    global critical_section_state, critical_section_request_ts, critical_section_pending
 
-    with cs_lock:
-        if cs_state =="in_cs":
+    with critical_section_lock:
+        if critical_section_state =="in_cs":
             with console_lock:
                 print("You are already in CS mode.")
             return
-        if cs_state =="requesting":
+        if critical_section_state =="requesting":
             with console_lock:
                 print("[CS] You are already requesting CS mode.")
                 return
-        cs_state = "requesting"
-        cs_request_ts = increment_timestamp()
+        critical_section_state = "requesting"
+        critical_section_request_ts = increment_timestamp()
         with neighbors_lock:
-            cs_pending = set(neighbors)
-    if not cs_pending:
-        with cs_lock:
-            cs_state = "in_cs"
+            critical_section_pending = set(neighbors)
+    if not critical_section_pending:
+        with critical_section_lock:
+            critical_section_state = "in_cs"
         with console_lock:
             print("[CS] Entered CS.")
         return
     msg = {
         "type": "cs_request",
         "msg_id": new_id(),
-        "lamport": cs_request_ts,
+        "lamport": critical_section_request_ts,
         "addr": [MY_HOST, MY_PORT],
         "ttl": 5,
     }
     forward(msg)
 
     with console_lock:
-        print(f"[CS] Requesting CS at Lamport {cs_request_ts}")
+        print(f"[CS] Requesting CS at Lamport {critical_section_request_ts}")
 
 def release_cs():
-    global cs_state, cs_request_ts, cs_pending
+    global critical_section_state, critical_section_request_ts, critical_section_pending
 
-    with cs_lock:
-        if cs_state != "in_cs":
+    with critical_section_lock:
+        if critical_section_state != "in_cs":
             with console_lock:
                 print("[CS] You are not in CS mode.")
             return
 
-        cs_state = "idle"
-        cs_request_ts = None
-        to_reply = list(cs_deferred)
-        cs_deferred.clear()
+        critical_section_state = "idle"
+        critical_section_request_ts = None
+        to_reply = list(critical_section_deferred)
+        critical_section_deferred.clear()
 
     for addr in to_reply:
         send_cs_reply(addr)
@@ -825,20 +894,20 @@ def release_cs():
 def handle_cs_request(msg, real_addr):
     # reply immediately if in idle, defer if in_cs
     # if both requesting, compare priority
-    global cs_state, cs_request_ts
+    global critical_section_state, critical_section_request_ts
 
     req_ts = msg.get("lamport", 0)
     requester = tuple(msg.get("addr", real_addr))
 
-    with cs_lock:
-        if cs_state == "idle":
+    with critical_section_lock:
+        if critical_section_state == "idle":
             send_cs_reply(requester)
             return
-        if cs_state == "in_cs":
-            cs_deferred.add(requester)
+        if critical_section_state == "in_cs":
+            critical_section_deferred.add(requester)
             return
 
-    my_ts = cs_request_ts
+    my_ts = critical_section_request_ts
     my_id = (MY_HOST, MY_PORT)
     their_id = requester
 
@@ -848,7 +917,7 @@ def handle_cs_request(msg, real_addr):
     if their_priority < my_priority:
         send_cs_reply(requester)
     else:
-        cs_deferred.add(requester)
+        critical_section_deferred.add(requester)
 
 def send_cs_reply(addr):
     lam = increment_timestamp()
@@ -862,30 +931,30 @@ def send_cs_reply(addr):
     send_msg(addr, msg)
 
 def handle_cs_reply(msg, real_addr):
-    global cs_state, cs_pending
+    global critical_section_state, critical_section_pending
 
     sender = real_addr
-    with cs_lock:
-        if cs_state != "requesting":
+    with critical_section_lock:
+        if critical_section_state != "requesting":
             return
-        cs_pending.discard(sender)
-        if not cs_pending:
-            cs_state = "in_cs"
+        critical_section_pending.discard(sender)
+        if not critical_section_pending:
+            critical_section_state = "in_cs"
             with console_lock:
                 print ("[CS] All replies received. Entering CS mode.")
 
 def with_global_cs(fn):
-    global cs_state, cs_pending
+    global critical_section_state, critical_section_pending
   
    
     request_cs()
 
     # Busywait until we are in CS mode
     while True:
-        with cs_lock:
-            if cs_state == "in_cs":
+        with critical_section_lock:
+            if critical_section_state == "in_cs":
                 break
-            current_pending = list(cs_pending)
+            current_pending = list(critical_section_pending)
         # time.sleep(0.05)
     for node in current_pending:
             try:
@@ -898,13 +967,13 @@ def with_global_cs(fn):
                
                 with neighbors_lock:
                     neighbors.discard(node)
-                with cs_lock:
-                     if node in cs_pending:
+                with critical_section_lock:
+                     if node in critical_section_pending:
                          print(f"[System] Node {node} detected dead during wait.")
-                         cs_pending.discard(node)
+                         critical_section_pending.discard(node)
                         
-                         if not cs_pending:
-                             cs_state = "in_cs"
+                         if not critical_section_pending:
+                             critical_section_state = "in_cs"
 
     time.sleep(1.0) 
     try:
@@ -915,16 +984,16 @@ def with_global_cs(fn):
 
 def begin_transaction():
     #Start a new local transaction for the current user
-    global current_tx_id
+    global current_transaction_id
 
-    with tx_lock:
-        if current_tx_id is not None:
+    with transaction_lock:
+        if current_transaction_id is not None:
             with console_lock:
-                print(f"[TX] A transaction is already active: {current_tx_id}")
+                print(f"[TX] A transaction is already active: {current_transaction_id}")
             return
 
         tx_id = new_id()
-        current_tx_id = tx_id
+        current_transaction_id = tx_id
         transactions[tx_id] = {
             "user": username,
             "ops": [],
@@ -937,13 +1006,13 @@ def begin_transaction():
 
 def add_reservation_op(station_id, start, end):
     #Add a reservation operation to the current transaction
-    global current_tx_id
-    with tx_lock:
-        if current_tx_id is None:
+    global current_transaction_id
+    with transaction_lock:
+        if current_transaction_id is None:
             with console_lock:
                 print("[TX] No active transaction. Use tx/begin first.")
             return
-        tx = transactions.get(current_tx_id)
+        tx = transactions.get(current_transaction_id)
         if not tx or tx["status"] != "active":
             with console_lock:
                 print(f"[TX] Cannot add operations, transaction is {tx['status'] if tx else 'unknown'}")
@@ -951,17 +1020,17 @@ def add_reservation_op(station_id, start, end):
         tx["ops"].append(("reserve", station_id, start, end))
 
     with console_lock:
-        print(f"[TX] Added reserve({station_id}, {start}, {end}) to {current_tx_id}")
+        print(f"[TX] Added reserve({station_id}, {start}, {end}) to {current_transaction_id}")
 
 def add_pin_op(room_name, text):
     #Add a pin message operation to the current transaction
-    global current_tx_id
-    with tx_lock:
-        if current_tx_id is None:
+    global current_transaction_id
+    with transaction_lock:
+        if current_transaction_id is None:
             with console_lock:
                 print("[TX] No active transaction. Use tx/begin first.")
             return
-        tx = transactions.get(current_tx_id)
+        tx = transactions.get(current_transaction_id)
         if not tx or tx["status"] != "active":
             with console_lock:
                 print(f"[TX] Cannot add operations, transaction is {tx['status'] if tx else 'unknown'}")
@@ -969,7 +1038,7 @@ def add_pin_op(room_name, text):
         tx["ops"].append(("pin", room_name, text))
 
     with console_lock:
-        print(f"[TX] Added pin({room_name}, {text!r}) to {current_tx_id}")
+        print(f"[TX] Added pin({room_name}, {text!r}) to {current_transaction_id}")
 
 def times_overlap(start1, end1, start2, end2):
    
@@ -1072,17 +1141,17 @@ def broadcast_tx_abort(tx_id, tx):
 
 def commit_transaction():
     #Commit the current transaction using the global CS for atomicity
-    global current_tx_id
-    with tx_lock:
-        if current_tx_id is None:
+    global current_transaction_id
+    with transaction_lock:
+        if current_transaction_id is None:
             with console_lock:
                 print("[TX] No active transaction to commit.")
             return
-        tx_id = current_tx_id
+        tx_id = current_transaction_id
 
     def do_commit():
         # This runs inside the distributed critical section
-        with tx_lock:
+        with transaction_lock:
             tx = transactions.get(tx_id)
             if not tx or tx["status"] != "active":
                 with console_lock:
@@ -1110,19 +1179,19 @@ def commit_transaction():
     with_global_cs(do_commit)
 
     # Clear current_tx_id after commit/abort path
-    with tx_lock:
-        current_tx_id = None
+    with transaction_lock:
+        current_transaction_id = None
 
 
 def abort_transaction():
     #Abort the current transaction explicitly
-    global current_tx_id
-    with tx_lock:
-        if current_tx_id is None:
+    global current_transaction_id
+    with transaction_lock:
+        if current_transaction_id is None:
             with console_lock:
                 print("[TX] No active transaction to abort.")
             return
-        tx_id = current_tx_id
+        tx_id = current_transaction_id
         tx = transactions.get(tx_id)
         if not tx or tx["status"] != "active":
             with console_lock:
@@ -1135,8 +1204,8 @@ def abort_transaction():
     with console_lock:
         print(f"[TX] Transaction {tx_id} aborted by user.")
 
-    with tx_lock:
-        current_tx_id = None
+    with transaction_lock:
+        current_transaction_id = None
 
 
 def handle_tx_commit(msg, real_addr):
@@ -1145,7 +1214,7 @@ def handle_tx_commit(msg, real_addr):
     user = msg.get("user")
     ops = msg.get("ops", [])
 
-    with tx_lock:
+    with transaction_lock:
         # Create or update local record
         tx = transactions.setdefault(tx_id, {
             "user": user,
@@ -1182,7 +1251,7 @@ def handle_tx_abort(msg, real_addr):
     tx_id = msg.get("tx_id")
     user = msg.get("user")
 
-    with tx_lock:
+    with transaction_lock:
         tx = transactions.setdefault(tx_id, {
             "user": user,
             "ops": [],

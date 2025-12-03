@@ -973,7 +973,7 @@ def with_global_cs(fn):
                 break
             current_pending = list(critical_section_pending)
         # time.sleep(0.05)
-    for node in current_pending:
+        for node in current_pending:
             try:
                 
                 s = socket.socket()
